@@ -3,7 +3,21 @@
 
 <script>
   /** @type {{ record_type: string; address: number; data: number[] }[]} */
-  let { records = [], bytesPerRow = 16, fontSize = 13, onScrolled = () => {}, onTopAddress = (_addr) => {}, onByteClick = (_addr) => {}, onSelectionChange = (_sel) => {}, gotoTarget = null } = $props();
+  let {
+    records = [], bytesPerRow = 16, fontSize = 13,
+    onScrolled = () => {}, onTopAddress = (_addr) => {},
+    onByteClick = (_addr) => {}, onSelectionChange = (_sel) => {},
+    gotoTarget = null,
+    // ── Edit mode ────────────────────────────────────────────────────────────
+    editable    = false,
+    onEditByte  = (_addr, _byte) => {},
+    onDelete    = (_lo, _hi) => {},
+    onCut       = (_lo, _hi) => {},
+    onFill      = (_lo, _hi) => {},
+    onMove      = (_lo, _hi) => {},
+    onPaste     = (_addr, _mode) => {},
+    clipboardSize = 0,
+  } = $props();
 
   const ROW_HEIGHT = $derived(fontSize + 7);
   const OVERSCAN   = 8;
@@ -369,20 +383,31 @@
   const activeCopyFormats = $derived(ALL_COPY_FORMATS.filter(f => !f.even || selCount % 2 === 0));
 
   function onContextMenu(e) {
-    if (selMin === null) return;
+    const hasSel = selMin !== null;
+    const hasClip = editable && clipboardSize > 0;
+    if (!hasSel && !hasClip) return;
+
     const byteEl = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-addr]');
     if (!byteEl) { ctxMenu = null; return; }
     const addr = parseInt(/** @type {HTMLElement} */ (byteEl).dataset.addr ?? '');
-    if (isNaN(addr) || addr < selMin || addr > selMax) { ctxMenu = null; return; }
+    if (isNaN(addr)) { ctxMenu = null; return; }
+
+    const inSel = hasSel && addr >= selMin && addr <= selMax;
+    if (!inSel && !hasClip) { ctxMenu = null; return; }
+
     e.preventDefault();
-    const buf = getSelectedBytes();
-    const formats = activeCopyFormats;
+
+    const buf      = inSel ? getSelectedBytes() : new Uint8Array(0);
+    const formats  = inSel ? activeCopyFormats : [];
     const previews = formats.map(f => { const s = f.fn(buf); return s.length > 32 ? s.slice(0, 29) + '…' : s; });
-    // Adjust so the menu doesn't overflow off screen
-    const menuW = 310, menuH = formats.length * 36 + 32;
+
+    // Estimate menu height for overflow avoidance
+    const editRows = editable ? (inSel ? 3 : 0) + (hasClip ? 2 : 0) : 0;
+    const copyRows = formats.length;
+    const menuW = 310, menuH = (editRows + copyRows) * 36 + 80;
     const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX;
     const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY;
-    ctxMenu = { x, y, previews };
+    ctxMenu = { x, y, previews, ctxAddr: addr, inSel };
   }
 
   async function copyAs(fmt) {
@@ -390,6 +415,97 @@
     const { invoke } = await import('@tauri-apps/api/core');
     try { await invoke('copy_plain_text', { text: fmt.fn(buf) }); } catch { /* clipboard unavailable */ }
     ctxMenu = null;
+  }
+
+  // ── Edit mode ─────────────────────────────────────────────────────────────
+  let editAddr   = $state(/** @type {number|null} */ (null));
+  let editNibble = $state(0);  // 0 = no nibble typed yet, 1 = high nibble typed
+  let editValue  = $state(0);  // accumulating byte value while editing
+
+  // Cancel edit when records change (file load) or editable turned off
+  $effect(() => {
+    void records;
+    if (!editable) { editAddr = null; editNibble = 0; editValue = 0; }
+  });
+
+  function getByteFromRecords(addr) {
+    for (const rec of records) {
+      const isData = rec.record_type === 'Data' || rec.record_type === 'S1'
+                  || rec.record_type === 'S2'   || rec.record_type === 'S3';
+      if (!isData || !rec.data.length) continue;
+      const off = addr - rec.address;
+      if (off >= 0 && off < rec.data.length) return rec.data[off];
+    }
+    return null;
+  }
+
+  function findNextDataAddr(addr) {
+    for (const row of rows) {
+      if (row.type !== 'data') continue;
+      for (let i = 0; i < row.bytes.length; i++) {
+        if (row.bytes[i] !== null && row.address + i > addr) {
+          return row.address + i;
+        }
+      }
+    }
+    return null;
+  }
+
+  function enterEdit(addr) {
+    if (!editable) return;
+    const cur = getByteFromRecords(addr);
+    if (cur === null) return; // can't edit null/blank bytes
+    editAddr   = addr;
+    editNibble = 0;
+    editValue  = cur;
+    // Single-byte selection to show context
+    selAnchor = addr; selFocus = addr;
+  }
+
+  function cancelEdit() {
+    editAddr = null; editNibble = 0; editValue = 0;
+  }
+
+  function confirmEdit(advance = true) {
+    if (editAddr === null) return;
+    const addr = editAddr;
+    const val  = editValue;
+    onEditByte(addr, val);
+    if (advance) {
+      const next = findNextDataAddr(addr);
+      if (next !== null) {
+        const cur = getByteFromRecords(next);
+        editAddr   = next;
+        editNibble = 0;
+        editValue  = cur ?? 0;
+        selAnchor = next; selFocus = next;
+      } else {
+        cancelEdit();
+      }
+    } else {
+      cancelEdit();
+    }
+  }
+
+  function onHexKeydown(e) {
+    if (editAddr === null) return false;
+    if (e.key === 'Escape') { cancelEdit(); e.preventDefault(); return true; }
+    if (e.key === 'Enter')  { confirmEdit(false); e.preventDefault(); return true; }
+    if (e.key === 'Tab')    { confirmEdit(true);  e.preventDefault(); return true; }
+    const hexVal = '0123456789abcdef'.indexOf(e.key.toLowerCase());
+    if (hexVal !== -1) {
+      e.preventDefault();
+      if (editNibble === 0) {
+        editValue  = hexVal << 4;
+        editNibble = 1;
+      } else {
+        editValue  = (editValue & 0xF0) | hexVal;
+        editNibble = 2;
+        confirmEdit(true); // auto-advance after second nibble
+      }
+      return true;
+    }
+    return false;
   }
 </script>
 
@@ -462,9 +578,13 @@
                         <span
                           class="hb ec-{i % 2} clickable"
                           class:sel={selMin !== null && selMin <= row.address + i && row.address + i <= selMax}
+                          class:editing={editAddr === row.address + i}
                           data-addr={row.address + i}
                           onclick={(e) => { e.stopPropagation(); onByteClick(row.address + i); }}
-                        >{hex8(byte)}</span>
+                          ondblclick={(e) => { e.stopPropagation(); enterEdit(row.address + i); }}
+                        >{editAddr === row.address + i
+                            ? (editNibble === 0 ? hex8(byte) : hex8(editValue))
+                            : hex8(byte)}</span>
                       {/if}
                     {/each}
                     {#each { length: pad } as _, i}
@@ -484,10 +604,14 @@
                         <span
                           class="ac clickable"
                           class:sel={selMin !== null && selMin <= row.address + i && row.address + i <= selMax}
-                          class:np={!isPrint(byte)}
+                          class:editing={editAddr === row.address + i}
+                          class:np={!isPrint(byte) && editAddr !== row.address + i}
                           data-addr={row.address + i}
                           onclick={(e) => { e.stopPropagation(); onByteClick(row.address + i); }}
-                        >{toAscii(byte)}</span>
+                          ondblclick={(e) => { e.stopPropagation(); enterEdit(row.address + i); }}
+                        >{editAddr === row.address + i
+                            ? (editNibble === 0 ? toAscii(byte) : toAscii(editValue))
+                            : toAscii(byte)}</span>
                       {/if}
                     {/each}
                   </span>
@@ -543,10 +667,17 @@
   {/if}
 </div>
 
-<!-- ── Copy context menu (fixed, portal-like) ── -->
+<!-- ── Copy / Edit context menu (fixed, portal-like) ── -->
 <svelte:window
-  onclick={(e) => { if (ctxMenu && !/** @type {Element} */ (e.target)?.closest('.ctx-menu')) ctxMenu = null; }}
-  onkeydown={(e) => { if (e.key === 'Escape') ctxMenu = null; }}
+  onclick={(e) => {
+    if (ctxMenu && !/** @type {Element} */ (e.target)?.closest('.ctx-menu')) ctxMenu = null;
+    // Click outside hex viewer cancels edit mode
+    if (editAddr !== null && !/** @type {Element} */ (e.target)?.closest('.hex-viewer')) cancelEdit();
+  }}
+  onkeydown={(e) => {
+    if (onHexKeydown(e)) return;
+    if (e.key === 'Escape') { ctxMenu = null; cancelEdit(); }
+  }}
 />
 
 {#if ctxMenu}
@@ -556,14 +687,54 @@
     style="left:{ctxMenu.x}px; top:{ctxMenu.y}px;"
     oncontextmenu={(e) => e.preventDefault()}
   >
-    <div class="ctx-header">Copy {selCount} byte{selCount === 1 ? '' : 's'} as…</div>
-    {#each activeCopyFormats as fmt, i}
+    {#if editable && ctxMenu.inSel}
+      <div class="ctx-header">Edit {selCount} byte{selCount === 1 ? '' : 's'}</div>
       <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div class="ctx-item" onclick={() => copyAs(fmt)}>
-        <span class="ctx-label">{fmt.label}</span>
-        <span class="ctx-preview">{ctxMenu.previews[i]}</span>
+      <div class="ctx-item" onclick={() => { onCut(selMin, selMax); ctxMenu = null; }}>
+        <span class="ctx-label">Cut</span>
+        <span class="ctx-preview">→ clipboard · deletes from address space</span>
       </div>
-    {/each}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="ctx-item ctx-danger" onclick={() => { onDelete(selMin, selMax); ctxMenu = null; }}>
+        <span class="ctx-label">Delete</span>
+        <span class="ctx-preview">remove from address space</span>
+      </div>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="ctx-item" onclick={() => { onFill(selMin, selMax); ctxMenu = null; }}>
+        <span class="ctx-label">Fill…</span>
+        <span class="ctx-preview">pattern or random bytes</span>
+      </div>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="ctx-item" onclick={() => { onMove(selMin, selMax); ctxMenu = null; }}>
+        <span class="ctx-label">Move…</span>
+        <span class="ctx-preview">cut and write to new address</span>
+      </div>
+    {/if}
+    {#if editable && clipboardSize > 0}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="ctx-item" onclick={() => { onPaste(ctxMenu.ctxAddr, 'overwrite'); ctxMenu = null; }}>
+        <span class="ctx-label">Paste {clipboardSize} byte{clipboardSize === 1 ? '' : 's'} (overwrite)</span>
+        <span class="ctx-preview">at 0x{ctxMenu.ctxAddr.toString(16).toUpperCase().padStart(8,'0')}</span>
+      </div>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div class="ctx-item" onclick={() => { onPaste(ctxMenu.ctxAddr, 'fill-empty'); ctxMenu = null; }}>
+        <span class="ctx-label">Paste {clipboardSize} byte{clipboardSize === 1 ? '' : 's'} (fill empty)</span>
+        <span class="ctx-preview">at 0x{ctxMenu.ctxAddr.toString(16).toUpperCase().padStart(8,'0')}</span>
+      </div>
+    {/if}
+    {#if editable && (ctxMenu.inSel || clipboardSize > 0) && ctxMenu.inSel}
+      <div class="ctx-sep"></div>
+    {/if}
+    {#if ctxMenu.inSel}
+      <div class="ctx-header">Copy {selCount} byte{selCount === 1 ? '' : 's'} as…</div>
+      {#each activeCopyFormats as fmt, i}
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div class="ctx-item" onclick={() => copyAs(fmt)}>
+          <span class="ctx-label">{fmt.label}</span>
+          <span class="ctx-preview">{ctxMenu.previews[i]}</span>
+        </div>
+      {/each}
+    {/if}
   </div>
 {/if}
 
@@ -810,6 +981,18 @@
     border-radius: 2px;
   }
 
+  /* ── Edit mode cursor ── */
+  .hb.editing,
+  .ac.editing {
+    outline: 2px solid var(--c-accent-b) !important;
+    outline-offset: -1px;
+    background: rgba(74, 144, 226, 0.22) !important;
+    color: #fff !important;
+    border-radius: 2px;
+    position: relative;
+    z-index: 1;
+  }
+
   /* Gap separator row */
   .gap-row {
     display: flex;
@@ -904,11 +1087,27 @@
     text-overflow: ellipsis;
   }
 
+  :global(.ctx-sep) {
+    height: 1px;
+    background: var(--c-border, #3c3c3c);
+    margin: 4px 0;
+  }
+
+  :global(.ctx-danger .ctx-label) {
+    color: var(--c-err, #e05555);
+  }
+
+  :global(.ctx-danger:hover) {
+    background: rgba(220, 50, 50, 0.12) !important;
+  }
+
   @media (prefers-color-scheme: light) {
     :global(.ctx-menu)   { background: #fff; border-color: #ddd; box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
     :global(.ctx-header) { color: #888; border-color: #e8e8e8; }
     :global(.ctx-label)  { color: #1e1e1e; }
     :global(.ctx-preview){ color: #888; }
     :global(.ctx-item:hover) { background: #f0f0f0; }
+    :global(.ctx-sep)    { background: #e8e8e8; }
+    :global(.ctx-danger:hover) { background: rgba(200, 30, 30, 0.08) !important; }
   }
 </style>

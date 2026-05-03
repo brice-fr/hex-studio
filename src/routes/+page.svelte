@@ -10,6 +10,11 @@
   import { open, save, message } from '@tauri-apps/plugin-dialog';
   import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
+  import {
+    cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
+    getBytesRange, buildFill, randomBytes as genRandomBytes,
+    computeChecksum, numberToBytes, normalize,
+  } from '$lib/editOps.js';
   import FileMenu from '$lib/components/FileMenu.svelte';
   import HexViewer from '$lib/components/HexViewer.svelte';
   import SegmentList   from '$lib/components/SegmentList.svelte';
@@ -23,6 +28,10 @@
   import PreferencesDialog from '$lib/components/PreferencesDialog.svelte';
   import FileAssocDialog from '$lib/components/FileAssocDialog.svelte';
   import CompareDialog  from '$lib/components/CompareDialog.svelte';
+  import FillDialog     from '$lib/components/FillDialog.svelte';
+  import MoveDialog     from '$lib/components/MoveDialog.svelte';
+  import ChecksumDialog from '$lib/components/ChecksumDialog.svelte';
+  import ImportMergeDialog from '$lib/components/ImportMergeDialog.svelte';
 
   // ── Persistent settings — read synchronously before first render ──────────
   const LS = 'hex-editor.';
@@ -48,6 +57,69 @@
   let hexTopAddress    = $state(0);        // tracks topmost visible address in HexViewer
   let gotoTarget       = $state(null);     // { addr, seq } — seq ensures reactivity on repeat
   let gotoSeq          = 0;
+
+  // ── Undo / Redo ───────────────────────────────────────────────────────────
+  /** @type {{ label: string; records: Array }[]} */
+  let undoStack = $state([]);
+  /** @type {{ label: string; records: Array }[]} */
+  let redoStack = $state([]);
+  const MAX_UNDO = 50;
+
+  function pushUndo(label) {
+    undoStack = [...undoStack.slice(-(MAX_UNDO - 1)), { label, records: cloneRecords(records) }];
+    redoStack = [];
+  }
+
+  function undo() {
+    if (undoStack.length === 0) return;
+    const top = undoStack[undoStack.length - 1];
+    redoStack = [...redoStack, { label: top.label, records: cloneRecords(records) }];
+    records   = top.records;
+    undoStack = undoStack.slice(0, -1);
+    status = `Undo: ${top.label}`;
+  }
+
+  function redo() {
+    if (redoStack.length === 0) return;
+    const top = redoStack[redoStack.length - 1];
+    undoStack = [...undoStack, { label: top.label, records: cloneRecords(records) }];
+    records   = top.records;
+    redoStack = redoStack.slice(0, -1);
+    status = `Redo: ${top.label}`;
+  }
+
+  // Reset undo/redo when a new file is loaded
+  function resetUndoHistory() { undoStack = []; redoStack = []; }
+
+  // Modified state — true when undoStack is non-empty (records changed since last load/save)
+  const isModified = $derived(undoStack.length > 0);
+
+  $effect(() => {
+    if (!currentFile) return;
+    const fileName = currentFile.split(/[\\/]/).at(-1);
+    getCurrentWindow().setTitle(`Hex Editor — ${fileName}${isModified ? ' ●' : ''}`);
+  });
+
+  // ── Binary clipboard (internal, not system clipboard) ────────────────────
+  /**
+   * @type {{ addr: number; bytes: Uint8Array } | null}
+   */
+  let binaryClipboard = $state(null);
+
+  // ── Edit dialog visibility ────────────────────────────────────────────────
+  let showFill         = $state(false);
+  let fillSelMin       = $state(0);
+  let fillSelMax       = $state(0);
+
+  let showMove         = $state(false);
+  let moveSelMin       = $state(0);
+  let moveSelMax       = $state(0);
+
+  let showChecksum     = $state(false);
+  let checksumPrefMin  = $state(0);
+  let checksumPrefMax  = $state(0);
+
+  let showImportMerge  = $state(false);
 
   // ── Display preferences ────────────────────────────────────────────────────
   let fontSize        = $state(parseInt(lsGet('fontSize',    '13')));
@@ -102,6 +174,138 @@
   function handleSelectionChange(sel) {
     hexSelection = sel;
     if (sel) { inspectorAddress = sel.focus; inspectorPinned = true; }
+  }
+
+  // ── Edit operation handlers ───────────────────────────────────────────────
+
+  function handleEditByte(addr, byte) {
+    pushUndo('Edit byte');
+    records = writeBytes(records, addr, [byte]);
+    status = `Edited 0x${addr.toString(16).toUpperCase().padStart(8,'0')} → 0x${byte.toString(16).toUpperCase().padStart(2,'0')}`;
+  }
+
+  function handleDelete(lo, hi) {
+    pushUndo('Delete');
+    records = deleteRange(records, lo, hi);
+    const n = hi - lo + 1;
+    status = `Deleted ${n.toLocaleString()} byte${n === 1 ? '' : 's'} at 0x${lo.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handleCut(lo, hi) {
+    pushUndo('Cut');
+    binaryClipboard = { addr: lo, bytes: getBytesRange(records, lo, hi) };
+    records = deleteRange(records, lo, hi);
+    const n = hi - lo + 1;
+    status = `Cut ${n.toLocaleString()} byte${n === 1 ? '' : 's'} at 0x${lo.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handleFillOpen(lo, hi) {
+    fillSelMin = lo;
+    fillSelMax = hi;
+    showFill = true;
+  }
+
+  function handleFillConfirm({ pattern, randomize, mode }) {
+    showFill = false;
+    const len = fillSelMax - fillSelMin + 1;
+    let fillBytes;
+    if (randomize) {
+      fillBytes = genRandomBytes(len);
+    } else {
+      const { filled } = buildFill(pattern, len);
+      fillBytes = filled;
+    }
+    pushUndo('Fill');
+    records = mode === 'overwrite'
+      ? writeBytes(records, fillSelMin, fillBytes)
+      : writeBytesEmpty(records, fillSelMin, fillBytes);
+    status = `Filled ${len.toLocaleString()} bytes at 0x${fillSelMin.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handlePaste(addr, mode) {
+    if (!binaryClipboard) return;
+    const { bytes } = binaryClipboard;
+    pushUndo('Paste');
+    records = mode === 'overwrite'
+      ? writeBytes(records, addr, bytes)
+      : writeBytesEmpty(records, addr, bytes);
+    const n = bytes.length;
+    status = `Pasted ${n.toLocaleString()} byte${n === 1 ? '' : 's'} at 0x${addr.toString(16).toUpperCase().padStart(8,'0')} (${mode})`;
+  }
+
+  function handleMoveOpen(lo, hi) {
+    moveSelMin = lo;
+    moveSelMax = hi;
+    showMove = true;
+  }
+
+  function handleMoveConfirm({ targetAddr, mode }) {
+    showMove = false;
+    const bytes = getBytesRange(records, moveSelMin, moveSelMax);
+    pushUndo('Move');
+    let updated = deleteRange(records, moveSelMin, moveSelMax);
+    updated = mode === 'overwrite'
+      ? writeBytes(updated, targetAddr, bytes)
+      : writeBytesEmpty(updated, targetAddr, bytes);
+    records = updated;
+    const n = bytes.length;
+    status = `Moved ${n.toLocaleString()} bytes to 0x${targetAddr.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handleChecksumOpen() {
+    checksumPrefMin = hexSelection ? hexSelection.start : 0;
+    checksumPrefMax = hexSelection ? hexSelection.end   : 0;
+    showChecksum = true;
+  }
+
+  function handleChecksumInsert({ lo, hi, algo, targetAddr, width, le }) {
+    showChecksum = false;
+    const val   = computeChecksum(records, lo, hi, algo);
+    const bytes = numberToBytes(val, width, le);
+    pushUndo('Insert checksum');
+    records = writeBytes(records, targetAddr, bytes);
+    const hex = '0x' + val.toString(16).toUpperCase().padStart(width * 2, '0');
+    status = `Inserted ${algo.toUpperCase()} checksum ${hex} at 0x${targetAddr.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handleImportMergeConfirm({ importedRecords, mode }) {
+    showImportMerge = false;
+    // Get all bytes from imported records
+    const importedNorm = normalize(importedRecords);
+    pushUndo('Import from file');
+    let updated = cloneRecords(records);
+    for (const rec of importedNorm) {
+      updated = mode === 'overwrite'
+        ? writeBytes(updated, rec.address, rec.data)
+        : writeBytesEmpty(updated, rec.address, rec.data);
+    }
+    records = normalize(updated);
+    const total = importedNorm.reduce((s, r) => s + r.data.length, 0);
+    status = `Merged ${total.toLocaleString()} bytes from file (${mode})`;
+  }
+
+  // ── Global keyboard shortcuts ─────────────────────────────────────────────
+  function handleGlobalKey(e) {
+    const mod = e.metaKey || e.ctrlKey;
+    // Undo / Redo
+    if (mod && e.key === 'z' && !e.shiftKey) { undo(); e.preventDefault(); return; }
+    if (mod && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) { redo(); e.preventDefault(); return; }
+    // Cut (Cmd/Ctrl+X)
+    if (mod && e.key === 'x' && hexSelection && records.length > 0) {
+      handleCut(hexSelection.start, hexSelection.end);
+      e.preventDefault(); return;
+    }
+    // Paste (Cmd/Ctrl+V)
+    if (mod && e.key === 'v' && binaryClipboard && records.length > 0) {
+      const pasteAddr = hexSelection ? hexSelection.start : hexTopAddress;
+      handlePaste(pasteAddr, 'overwrite');
+      e.preventDefault(); return;
+    }
+    // Delete key — remove selection from address space
+    if (e.key === 'Delete' && hexSelection && records.length > 0 && !mod) {
+      handleDelete(hexSelection.start, hexSelection.end);
+      e.preventDefault(); return;
+    }
   }
 
   let unlistenDragDrop;
@@ -209,8 +413,9 @@
 
       records          = parsed.records;
       inspectorPinned  = false;
-      currentFile   = path;
-      currentFormat = format;
+      currentFile      = path;
+      currentFormat    = format;
+      resetUndoHistory();
       const fileName = path.split('/').at(-1);
       await getCurrentWindow().setTitle(`Hex Editor — ${fileName}`);
 
@@ -264,8 +469,9 @@
       const bytes = await openFile(path);
       records          = [{ record_type: 'Data', address: baseAddr, data: bytes }];
       inspectorPinned  = false;
-      currentFile   = path;
-      currentFormat = 'binary';
+      currentFile      = path;
+      currentFormat    = 'binary';
+      resetUndoHistory();
       const fileName = path.split('/').at(-1);
       await getCurrentWindow().setTitle(`Hex Editor — ${fileName}`);
       status = `Loaded ${bytes.length.toLocaleString()} bytes · Binary @ 0x${baseAddr.toString(16).toUpperCase().padStart(8, '0')}`;
@@ -406,6 +612,24 @@
               await PredefinedMenuItem.new({ item: 'CloseWindow' }),
             ],
           }),
+          // ③ Edit
+          await Submenu.new({
+            text: 'Edit',
+            items: [
+              await MenuItem.new({ id: 'undo', text: 'Undo', accelerator: 'CmdOrCtrl+Z', action: undo }),
+              await MenuItem.new({ id: 'redo', text: 'Redo', accelerator: 'CmdOrCtrl+Shift+Z', action: redo }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
+              await MenuItem.new({ id: 'edit-cut',    text: 'Cut',    accelerator: 'CmdOrCtrl+X', action: () => { if (hexSelection) handleCut(hexSelection.start, hexSelection.end); } }),
+              await MenuItem.new({ id: 'edit-paste',  text: 'Paste',  accelerator: 'CmdOrCtrl+V', action: () => { if (binaryClipboard) handlePaste(hexSelection ? hexSelection.start : hexTopAddress, 'overwrite'); } }),
+              await MenuItem.new({ id: 'edit-delete', text: 'Delete', action: () => { if (hexSelection) handleDelete(hexSelection.start, hexSelection.end); } }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
+              await MenuItem.new({ id: 'edit-fill',   text: 'Fill Selection…',   action: () => { if (hexSelection) handleFillOpen(hexSelection.start, hexSelection.end); } }),
+              await MenuItem.new({ id: 'edit-move',   text: 'Move Selection…',   action: () => { if (hexSelection) handleMoveOpen(hexSelection.start, hexSelection.end); } }),
+              await MenuItem.new({ id: 'edit-import-merge', text: 'Import from File…', action: () => { if (records.length > 0) showImportMerge = true; } }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
+              await MenuItem.new({ id: 'edit-checksum', text: 'Insert Checksum…', action: () => { if (records.length > 0) handleChecksumOpen(); } }),
+            ],
+          }),
           // ④ Search
           await Submenu.new({
             text: 'Search',
@@ -500,6 +724,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleGlobalKey} />
+
 <AboutDialog open={showAbout} onClose={() => (showAbout = false)} />
 
 <FindDialog
@@ -562,6 +788,37 @@
   onCancel={() => { showCompare = false; }}
 />
 
+<FillDialog
+  open={showFill}
+  selMin={fillSelMin}
+  selMax={fillSelMax}
+  onFill={handleFillConfirm}
+  onClose={() => (showFill = false)}
+/>
+
+<MoveDialog
+  open={showMove}
+  sourceMin={moveSelMin}
+  sourceMax={moveSelMax}
+  onMove={handleMoveConfirm}
+  onClose={() => (showMove = false)}
+/>
+
+<ChecksumDialog
+  open={showChecksum}
+  {records}
+  prefillMin={checksumPrefMin}
+  prefillMax={checksumPrefMax}
+  onInsert={handleChecksumInsert}
+  onClose={() => (showChecksum = false)}
+/>
+
+<ImportMergeDialog
+  open={showImportMerge}
+  onMerge={handleImportMergeConfirm}
+  onClose={() => (showImportMerge = false)}
+/>
+
 {#if isDragging}
   <div class="drop-overlay">
     <div class="drop-card">
@@ -593,6 +850,14 @@
         onTopAddress={(addr) => { hexTopAddress = addr; }}
         onByteClick={handleByteClick}
         onSelectionChange={handleSelectionChange}
+        editable={records.length > 0}
+        onEditByte={handleEditByte}
+        onDelete={handleDelete}
+        onCut={handleCut}
+        onFill={handleFillOpen}
+        onMove={handleMoveOpen}
+        onPaste={handlePaste}
+        clipboardSize={binaryClipboard ? binaryClipboard.bytes.length : 0}
       />
     </main>
 
