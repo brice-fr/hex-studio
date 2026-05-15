@@ -408,7 +408,7 @@
     const copyRows = formats.length;
     const menuW = 310, menuH = (editRows + copyRows) * 36 + 80;
     const x = e.clientX + menuW > window.innerWidth  ? e.clientX - menuW : e.clientX;
-    const y = e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY;
+    const y = Math.max(4, e.clientY + menuH > window.innerHeight ? e.clientY - menuH : e.clientY);
     ctxMenu = { x, y, previews, ctxAddr: addr, inSel };
   }
 
