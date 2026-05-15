@@ -193,6 +193,8 @@
 
   function onScrollPointerDown(e) {
     if (e.button !== 0) return;
+    // Dismiss any browser text selection that may have crept in
+    window.getSelection()?.removeAllRanges();
     const byteEl = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-addr]');
     if (!byteEl) { selAnchor = null; selFocus = null; return; }
     const addr = parseInt(/** @type {HTMLElement} */ (byteEl).dataset.addr ?? '');
@@ -581,7 +583,7 @@
                           class:editing={editAddr === row.address + i}
                           data-addr={row.address + i}
                           onclick={(e) => { e.stopPropagation(); onByteClick(row.address + i); }}
-                          ondblclick={(e) => { e.stopPropagation(); enterEdit(row.address + i); }}
+                          ondblclick={(e) => { e.preventDefault(); e.stopPropagation(); enterEdit(row.address + i); }}
                         >{editAddr === row.address + i
                             ? (editNibble === 0 ? hex8(byte) : hex8(editValue))
                             : hex8(byte)}</span>
@@ -608,7 +610,7 @@
                           class:np={!isPrint(byte) && editAddr !== row.address + i}
                           data-addr={row.address + i}
                           onclick={(e) => { e.stopPropagation(); onByteClick(row.address + i); }}
-                          ondblclick={(e) => { e.stopPropagation(); enterEdit(row.address + i); }}
+                          ondblclick={(e) => { e.preventDefault(); e.stopPropagation(); enterEdit(row.address + i); }}
                         >{editAddr === row.address + i
                             ? (editNibble === 0 ? toAscii(byte) : toAscii(editValue))
                             : toAscii(byte)}</span>
@@ -746,6 +748,8 @@
     flex-direction: column;
     overflow: hidden;
     background: var(--c-bg);
+    user-select: none;   /* prevent browser text-selection during pointer drag */
+    -webkit-user-select: none;
   }
 
   /* ── Scroll + minimap wrapper ── */
