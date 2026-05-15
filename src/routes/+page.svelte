@@ -837,7 +837,26 @@
 
 <div class="app-shell" onclick={() => { if (!loading && !saving) status = ''; }}>
   <!-- Toolbar: open + save icons -->
-  <FileMenu onOpen={handleOpen} onSave={handleSave} onExport={() => showExportHtml = true} onFind={handleFindOpen} onGoto={handleGotoOpen} onCompare={handleCompareOpen} onSettings={() => showPreferences = true} {loading} {saving} hasFile={records.length > 0} />
+  <FileMenu
+    onOpen={handleOpen}
+    onSave={handleSave}
+    onExport={() => showExportHtml = true}
+    onFind={handleFindOpen}
+    onGoto={handleGotoOpen}
+    onCompare={handleCompareOpen}
+    onSettings={() => showPreferences = true}
+    {loading} {saving}
+    hasFile={records.length > 0}
+    onUndo={undo}
+    onRedo={redo}
+    canUndo={undoStack.length > 0}
+    canRedo={redoStack.length > 0}
+    onFill={() => { if (hexSelection) handleFillOpen(hexSelection.start, hexSelection.end); }}
+    onMove={() => { if (hexSelection) handleMoveOpen(hexSelection.start, hexSelection.end); }}
+    onChecksum={handleChecksumOpen}
+    onImportMerge={() => { if (records.length > 0) showImportMerge = true; }}
+    hasSelection={hexSelection !== null}
+  />
 
   <div class="content-area">
     <main class="viewer-area">
