@@ -100,7 +100,7 @@ pub fn write_srec(records: &[RecordData]) -> String {
 
     // S0 header.
     {
-        let hdr = b"hex-editor";
+        let hdr = b"hex-studio";
         let bc = (2 + hdr.len() + 1) as u8; // 2-byte addr + data + checksum
         let mut sum = bc; // address bytes are both 0x00
         for b in hdr {

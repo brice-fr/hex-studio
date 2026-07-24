@@ -34,7 +34,7 @@
   import ImportMergeDialog from '$lib/components/ImportMergeDialog.svelte';
 
   // ── Persistent settings — read synchronously before first render ──────────
-  const LS = 'hex-editor.';
+  const LS = 'hex-studio.';
   const lsGet = (key, fallback) => { const v = localStorage.getItem(LS + key); return v !== null ? v : fallback; };
   const lsSet = (key, val)      => localStorage.setItem(LS + key, String(val));
 
@@ -97,7 +97,7 @@
   $effect(() => {
     if (!currentFile) return;
     const fileName = currentFile.split(/[\\/]/).at(-1);
-    getCurrentWindow().setTitle(`Hex Editor — ${fileName}${isModified ? ' ●' : ''}`);
+    getCurrentWindow().setTitle(`Hex Studio — ${fileName}${isModified ? ' ●' : ''}`);
   });
 
   // ── Binary clipboard (internal, not system clipboard) ────────────────────
@@ -417,7 +417,7 @@
       currentFormat    = format;
       resetUndoHistory();
       const fileName = path.split('/').at(-1);
-      await getCurrentWindow().setTitle(`Hex Editor — ${fileName}`);
+      await getCurrentWindow().setTitle(`Hex Studio — ${fileName}`);
 
       let statusMsg = `Loaded ${parsed.total_data_bytes.toLocaleString()} bytes · ${format.toUpperCase()}`;
       if (parsed.checksum_warnings > 0) {
@@ -473,7 +473,7 @@
       currentFormat    = 'binary';
       resetUndoHistory();
       const fileName = path.split('/').at(-1);
-      await getCurrentWindow().setTitle(`Hex Editor — ${fileName}`);
+      await getCurrentWindow().setTitle(`Hex Studio — ${fileName}`);
       status = `Loaded ${bytes.length.toLocaleString()} bytes · Binary @ 0x${baseAddr.toString(16).toUpperCase().padStart(8, '0')}`;
     } catch (err) {
       await message(String(err), { kind: 'error', title: 'Cannot open file' });
@@ -561,7 +561,7 @@
 
       const aboutItem = await MenuItem.new({
         id: 'about',
-        text: 'About Hex Editor',
+        text: 'About Hex Studio',
         action: () => (showAbout = true),
       });
 
@@ -583,7 +583,7 @@
           // ① App menu — macOS only (Services / Hide / Quit)
           ...(isMac ? [
             await Submenu.new({
-              text: 'Hex Editor',
+              text: 'Hex Studio',
               items: [
                 preferencesItem,
                 aboutItem,

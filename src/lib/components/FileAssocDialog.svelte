@@ -105,7 +105,7 @@
             <span class="spinner-text">Checking current associations…</span>
           </div>
         {:else}
-          <p class="description">Select which file formats should open with Hex Editor.</p>
+          <p class="description">Select which file formats should open with Hex Studio.</p>
 
           {#if isMac}
             <div class="macos-note">

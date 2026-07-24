@@ -147,7 +147,7 @@ mod platform {
     use core_foundation::base::TCFType;
     use core_foundation::string::{CFString, CFStringRef};
 
-    const BUNDLE_ID: &str = "com.brice-dev.hex-editor";
+    const BUNDLE_ID: &str = "com.brice-dev.hex-studio";
 
     extern "C" {
         fn UTTypeCreatePreferredIdentifierForTag(
@@ -251,7 +251,7 @@ mod platform {
         }
     }
 
-    const DESKTOP_FILE: &str = "hex-editor.desktop";
+    const DESKTOP_FILE: &str = "hex-studio.desktop";
 
     fn is_associated(ext: &str) -> bool {
         let mime = mime_for_ext(ext);
@@ -261,7 +261,7 @@ mod platform {
         match out {
             Ok(o) => {
                 let s = String::from_utf8_lossy(&o.stdout).to_lowercase();
-                s.contains("hex-editor")
+                s.contains("hex-studio")
             }
             Err(_) => false,
         }

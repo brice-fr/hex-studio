@@ -27,17 +27,17 @@
     class="backdrop"
     role="dialog"
     aria-modal="true"
-    aria-label="About Hex Editor"
+    aria-label="About Hex Studio"
     tabindex="-1"
     onclick={handleBackdrop}
     onkeydown={handleKey}
   >
     <div class="card">
       <!-- Icon -->
-      <img class="app-icon" src="/icon.png" alt="Hex Editor icon" draggable="false" />
+      <img class="app-icon" src="/icon.png" alt="Hex Studio icon" draggable="false" />
 
       <!-- Name -->
-      <h1 class="app-name">Hex Editor</h1>
+      <h1 class="app-name">Hex Studio</h1>
 
       <!-- Version -->
       <p class="app-version">Version {version}</p>

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Brice LECOLE
 
 /**
- * api.js — thin abstraction over Tauri's `invoke` for the hex-editor backend.
+ * api.js — thin abstraction over Tauri's `invoke` for the hex-studio backend.
  *
  * All functions return Promises. Errors from Rust propagate as rejected
  * Promises with a string message.
