@@ -138,7 +138,7 @@ A fast, cross-platform hex editor for **Intel HEX**, **Motorola S-record**, and 
 ### Run in development mode
 
 ```bash
-git clone https://github.com/brice-dev/hex-studio.git
+git clone https://github.com/brice-fr/hex-studio.git
 cd hex-studio
 npm install
 npm run tauri dev
