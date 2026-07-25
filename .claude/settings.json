@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run check)",
+      "Bash(cargo check)",
+      "Bash(cargo check *)",
+      "Bash(cargo test)",
+      "Bash(cargo test *)",
+      "Bash(sips -g *)",
+      "Bash(hdiutil info)",
+      "Bash(hdiutil info *)",
+      "mcp__computer-use__screenshot",
+      "mcp__computer-use__zoom",
+      "mcp__visualize__read_me",
+      "mcp__Claude_Preview__preview_screenshot",
+      "mcp__Claude_Preview__preview_console_logs",
+      "mcp__Claude_Browser__read_page",
+      "mcp__Claude_Browser__get_page_text",
+      "mcp__Claude_Browser__read_console_messages",
+      "mcp__Claude_Browser__read_network_requests",
+      "mcp__Claude_Browser__preview_logs",
+      "mcp__Claude_Browser__preview_list",
+      "mcp__Claude_Browser__tabs_context",
+      "mcp__Claude_Browser__find"
+    ]
+  }
+}
