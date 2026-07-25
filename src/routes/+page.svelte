@@ -8,7 +8,8 @@
   import { PhysicalSize } from '@tauri-apps/api/dpi';
   import { Menu, Submenu, MenuItem, CheckMenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
   import { open, save, message } from '@tauri-apps/plugin-dialog';
-  import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile } from '$lib/api.js';
+  import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile,
+           a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
@@ -33,6 +34,7 @@
   import ChecksumDialog from '$lib/components/ChecksumDialog.svelte';
   import ImportMergeDialog from '$lib/components/ImportMergeDialog.svelte';
   import SelectRangeDialog from '$lib/components/SelectRangeDialog.svelte';
+  import DataView from '$lib/components/DataView.svelte';
 
   // ── Persistent settings — read synchronously before first render ──────────
   const LS = 'hex-studio.';
@@ -129,16 +131,43 @@
   let rangeTarget           = $state(/** @type {{start:number,end:number,seq:number}|null} */ (null));
   let rangeTargetSeq        = 0;
 
+  // ── A2L data view ─────────────────────────────────────────────────────────
+  let viewMode     = $state(/** @type {'hex'|'data'} */ ('hex'));
+  let a2lPath      = $state('');
+  let a2lSummary   = $state(/** @type {any} */ (null));
+  let a2lRows      = $state(/** @type {any[]} */ ([]));
+  let a2lStatsData = $state(/** @type {any} */ (null));
+  let a2lDetailData = $state(/** @type {any} */ (null));
+  let a2lSelected  = $state(/** @type {string|null} */ (null));
+  let a2lLoading   = $state(false);
+  let a2lDecoding  = $state(false);
+
+  const a2lFileName = $derived(a2lPath ? (a2lPath.split(/[\\/]/).at(-1) ?? '') : '');
+
+  // Remember which A2L was last used with a given hex file so the load dialog
+  // can pre-fill it. Deliberately not auto-loaded — the association is a hint,
+  // not a fact, and silently decoding against the wrong A2L is worse than
+  // asking.
+  const a2lMemoryKey = (hexPath) => `a2lFor.${hexPath}`;
+  function rememberA2l(hexPath, path) {
+    if (hexPath && path) lsSet(a2lMemoryKey(hexPath), path);
+  }
+  function recallA2l(hexPath) {
+    return hexPath ? lsGet(a2lMemoryKey(hexPath), '') : '';
+  }
+
   // ── Display preferences ────────────────────────────────────────────────────
   let fontSize        = $state(parseInt(lsGet('fontSize',    '13')));
   let bytesPerRow     = $state(parseInt(lsGet('bytesPerRow', '16')));
   let theme           = $state(lsGet('theme', 'system'));
   let showPreferences = $state(false);
   let showFileAssoc = $state(false);
+  let showMeasurements = $state(lsGet('showMeasurements', 'false') === 'true');
 
   $effect(() => { lsSet('fontSize',    fontSize); });
   $effect(() => { lsSet('bytesPerRow', bytesPerRow); });
   $effect(() => { lsSet('theme',       theme); });
+  $effect(() => { lsSet('showMeasurements', showMeasurements); });
 
   $effect(() => {
     document.documentElement.setAttribute('data-theme', theme === 'system' ? '' : theme);
@@ -157,6 +186,9 @@
   let dataInspectorMenuItem = null;
   let exportHtmlMenuItem    = null;
   let compareMenuItem       = null;
+  let a2lUnloadMenuItem     = null;
+  let hexViewMenuItem       = null;
+  let dataViewMenuItem      = null;
 
   // Keep native menu checkmarks in sync with state.
   // NOTE: the value must be read into a local variable BEFORE the ?. call —
@@ -166,6 +198,10 @@
   $effect(() => { const v = showDataInspector; dataInspectorMenuItem?.setChecked(v); });
   $effect(() => { const v = records.length > 0; exportHtmlMenuItem?.setEnabled(v); });
   $effect(() => { const v = records.length > 0; compareMenuItem?.setEnabled(v); });
+  $effect(() => { const v = a2lSummary !== null; a2lUnloadMenuItem?.setEnabled(v); });
+  $effect(() => { const v = a2lSummary !== null; dataViewMenuItem?.setEnabled(v); });
+  $effect(() => { const v = viewMode === 'hex';  hexViewMenuItem?.setChecked(v); });
+  $effect(() => { const v = viewMode === 'data'; dataViewMenuItem?.setChecked(v); });
 
   // ── Data Inspector address — follows scroll unless pinned by a byte click ─
   let inspectorAddress = $state(0);
@@ -292,6 +328,157 @@
     inspectorPinned  = true;
     const n = end - start + 1;
     status = `Selected ${n.toLocaleString()} byte${n === 1 ? '' : 's'}: 0x${start.toString(16).toUpperCase().padStart(8,'0')} – 0x${end.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  // ── A2L handlers ──────────────────────────────────────────────────────────
+
+  // Any change to the byte image invalidates every decoded physical value.
+  // Marking stale rather than re-decoding immediately keeps hex-view editing
+  // free of an IPC round-trip per keystroke.
+  let a2lStale = $state(false);
+
+  $effect(() => {
+    void records;
+    void showMeasurements;
+    if (a2lSummary) a2lStale = true;
+  });
+
+  $effect(() => {
+    if (viewMode === 'data' && a2lSummary && a2lStale && !a2lDecoding) {
+      refreshA2lData();
+    }
+  });
+
+  // The data view cannot exist without a description.
+  $effect(() => { if (!a2lSummary && viewMode === 'data') viewMode = 'hex'; });
+
+  async function refreshA2lData() {
+    if (!a2lSummary) return;
+    a2lStale    = false;   // cleared first so the effect cannot re-enter
+    a2lDecoding = true;
+    try {
+      const [rows, st] = await Promise.all([
+        a2lList(records, showMeasurements),
+        a2lStats(records, showMeasurements),
+      ]);
+      a2lRows      = rows;
+      a2lStatsData = st;
+      if (a2lSelected) await loadA2lDetail(a2lSelected);
+    } catch (err) {
+      status = `Could not decode against the A2L: ${err}`;
+    } finally {
+      a2lDecoding = false;
+    }
+  }
+
+  async function loadA2lDetail(name) {
+    const row = a2lRows.find((r) => r.name === name);
+    // Only 1D objects have point arrays worth fetching.
+    if (!row || row.category !== 'curve') { a2lDetailData = null; return; }
+    try {
+      a2lDetailData = await a2lDetail(name, records);
+    } catch {
+      a2lDetailData = null;
+    }
+  }
+
+  async function handleA2lSelect(name) {
+    a2lSelected = name;
+    await loadA2lDetail(name);
+  }
+
+  async function handleA2lLoadOpen() {
+    const remembered = recallA2l(currentFile);
+    const selected = await open({
+      multiple: false,
+      defaultPath: remembered || undefined,
+      filters: [
+        { name: 'A2L description', extensions: ['a2l'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (!selected) return;
+    await handleA2lLoadPath(selected);
+  }
+
+  async function handleA2lLoadPath(path) {
+    a2lLoading = true;
+    status     = 'Parsing A2L…';
+    try {
+      const summary = await a2lLoad(path);
+      a2lSummary    = summary;
+      a2lPath       = path;
+      a2lSelected   = null;
+      a2lDetailData = null;
+      rememberA2l(currentFile, path);
+
+      await refreshA2lData();
+      viewMode = 'data';
+
+      let msg = `A2L loaded · ${summary.characteristic_count} characteristics`
+              + `, ${summary.axis_pts_count} axis · ${summary.measurement_count} measurements`;
+      if (a2lStatsData) {
+        msg += ` · ${a2lStatsData.coverage_pct.toFixed(1)} % of image described`;
+      }
+      if (summary.warnings.length > 0) {
+        msg += ` · ⚠ ${summary.warnings.length} parser warning${summary.warnings.length > 1 ? 's' : ''}`;
+      }
+      status = msg;
+    } catch (err) {
+      await message(String(err), { kind: 'error', title: 'Cannot load A2L file' });
+      status = '';
+    } finally {
+      a2lLoading = false;
+    }
+  }
+
+  async function handleA2lUnload() {
+    try { await a2lUnload(); } catch { /* dropping state cannot meaningfully fail */ }
+    a2lSummary    = null;
+    a2lPath       = '';
+    a2lRows       = [];
+    a2lStatsData  = null;
+    a2lDetailData = null;
+    a2lSelected   = null;
+    viewMode      = 'hex';
+    status        = 'A2L unloaded';
+  }
+
+  /**
+   * Apply an edited physical value. The bytes come from Rust but are written
+   * here through writeBytes, so the change joins the same undo stack and
+   * modified flag as a hex edit instead of forming a parallel edit path.
+   */
+  async function applyA2lWrite(name, encoded) {
+    pushUndo(`Edit ${name}`);
+    records = writeBytes(records, encoded.address, encoded.bytes);
+    const hex = encoded.bytes.map((b) => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+    status = `${name} → ${encoded.phys} (${hex} @ 0x${encoded.address.toString(16).toUpperCase().padStart(8, '0')})`;
+  }
+
+  async function handleA2lEditValue(name, phys) {
+    try {
+      await applyA2lWrite(name, await a2lEncodeValue(name, phys));
+    } catch (err) {
+      status = `Cannot write ${name}: ${err}`;
+    }
+  }
+
+  async function handleA2lEditText(name, text) {
+    try {
+      await applyA2lWrite(name, await a2lEncodeText(name, text));
+    } catch (err) {
+      status = `Cannot write ${name}: ${err}`;
+    }
+  }
+
+  /** Jump from a parameter to its bytes in the hex view. */
+  function handleA2lGoto(addr) {
+    viewMode         = 'hex';
+    gotoTarget       = { addr, seq: ++gotoSeq };
+    inspectorAddress = addr;
+    inspectorPinned  = true;
+    status = `0x${addr.toString(16).toUpperCase().padStart(8, '0')}`;
   }
 
   function handleImportMergeConfirm({ importedRecords, mode }) {
@@ -587,6 +774,22 @@
         action: () => { showDataInspector = !showDataInspector; },
       });
 
+      hexViewMenuItem = await CheckMenuItem.new({
+        id: 'view-hex',
+        text: 'Hex View',
+        checked: viewMode === 'hex',
+        accelerator: 'CmdOrCtrl+1',
+        action: () => { viewMode = 'hex'; },
+      });
+      dataViewMenuItem = await CheckMenuItem.new({
+        id: 'view-data',
+        text: 'Data View',
+        checked: viewMode === 'data',
+        enabled: false,
+        accelerator: 'CmdOrCtrl+2',
+        action: () => { if (a2lSummary) viewMode = 'data'; },
+      });
+
       const aboutItem = await MenuItem.new({
         id: 'about',
         text: 'About Hex Studio',
@@ -635,6 +838,9 @@
               (exportHtmlMenuItem = await MenuItem.new({ id: 'export-html', text: 'Export as HTML…', enabled: false, action: () => (showExportHtml = true) })),
               await MenuItem.new({ id: 'import-binary', text: 'Import Binary…', accelerator: 'CmdOrCtrl+B', action: handleImportBinaryOpen }),
               await PredefinedMenuItem.new({ item: 'Separator' }),
+              await MenuItem.new({ id: 'a2l-load', text: 'Load associated A2L to enable data view…', accelerator: 'CmdOrCtrl+Shift+D', action: handleA2lLoadOpen }),
+              (a2lUnloadMenuItem = await MenuItem.new({ id: 'a2l-unload', text: 'Unload A2L', enabled: false, action: handleA2lUnload })),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
               (compareMenuItem = await MenuItem.new({ id: 'compare', text: 'Compare with…', enabled: false, action: handleCompareOpen })),
               await PredefinedMenuItem.new({ item: 'Separator' }),
               await PredefinedMenuItem.new({ item: 'CloseWindow' }),
@@ -669,10 +875,13 @@
               await MenuItem.new({ id: 'goto-address', text: 'Go to Address…', accelerator: 'CmdOrCtrl+G', action: handleGotoOpen }),
             ],
           }),
-          // ⑤ View — toggle side panels + native fullscreen
+          // ⑤ View — view mode, side panels, native fullscreen
           await Submenu.new({
             text: 'View',
             items: [
+              hexViewMenuItem,
+              dataViewMenuItem,
+              await PredefinedMenuItem.new({ item: 'Separator' }),
               segmentListMenuItem,
               dataInspectorMenuItem,
               await PredefinedMenuItem.new({ item: 'Separator' }),
@@ -714,8 +923,11 @@
           isDragging = false;
           const paths = event.payload.paths;
           if (paths.length > 0) {
-            if (showCompare) compareFile = paths[0];
-            else handleOpenPath(paths[0]);
+            // Tauri's drag-drop is window-global rather than per-element, so
+            // route by extension instead of by where the pointer landed.
+            if (/\.a2l$/i.test(paths[0]))   handleA2lLoadPath(paths[0]);
+            else if (showCompare)           compareFile = paths[0];
+            else                            handleOpenPath(paths[0]);
           }
         } else if (event.payload.type === 'enter') {
           isDragging = true;
@@ -792,9 +1004,11 @@
   {fontSize}
   {bytesPerRow}
   {theme}
+  {showMeasurements}
   onFontSize={(n) => { fontSize = n; }}
   onBytesPerRow={(n) => { bytesPerRow = n; }}
   onTheme={(t) => { theme = t; }}
+  onShowMeasurements={(v) => { showMeasurements = v; }}
   onClose={() => { showPreferences = false; }}
 />
 
@@ -896,29 +1110,50 @@
     onImportMerge={() => { if (records.length > 0) showImportMerge = true; }}
     onSelectRange={handleSelectRangeOpen}
     hasSelection={hexSelection !== null}
+    {viewMode}
+    onViewMode={(m) => { viewMode = m; }}
+    a2lName={a2lFileName}
+    {a2lLoading}
+    onLoadA2l={handleA2lLoadOpen}
+    onUnloadA2l={handleA2lUnload}
   />
 
   <div class="content-area">
     <main class="viewer-area">
-      <HexViewer
-        {records}
-        {bytesPerRow}
-        {fontSize}
-        {gotoTarget}
-        {rangeTarget}
-        onScrolled={() => { if (!loading && !saving) status = ''; }}
-        onTopAddress={(addr) => { hexTopAddress = addr; }}
-        onByteClick={handleByteClick}
-        onSelectionChange={handleSelectionChange}
-        editable={records.length > 0}
-        onEditByte={handleEditByte}
-        onDelete={handleDelete}
-        onCut={handleCut}
-        onFill={handleFillOpen}
-        onMove={handleMoveOpen}
-        onPaste={handlePaste}
-        clipboardSize={binaryClipboard ? binaryClipboard.bytes.length : 0}
-      />
+      {#if viewMode === 'data'}
+        <DataView
+          rows={a2lRows}
+          stats={a2lStatsData}
+          detail={a2lDetailData}
+          selected={a2lSelected}
+          loading={a2lDecoding}
+          {fontSize}
+          onSelect={handleA2lSelect}
+          onEditValue={handleA2lEditValue}
+          onEditText={handleA2lEditText}
+          onGoto={handleA2lGoto}
+        />
+      {:else}
+        <HexViewer
+          {records}
+          {bytesPerRow}
+          {fontSize}
+          {gotoTarget}
+          {rangeTarget}
+          onScrolled={() => { if (!loading && !saving) status = ''; }}
+          onTopAddress={(addr) => { hexTopAddress = addr; }}
+          onByteClick={handleByteClick}
+          onSelectionChange={handleSelectionChange}
+          editable={records.length > 0}
+          onEditByte={handleEditByte}
+          onDelete={handleDelete}
+          onCut={handleCut}
+          onFill={handleFillOpen}
+          onMove={handleMoveOpen}
+          onPaste={handlePaste}
+          clipboardSize={binaryClipboard ? binaryClipboard.bytes.length : 0}
+        />
+      {/if}
     </main>
 
     {#if showSegmentList || showDataInspector}

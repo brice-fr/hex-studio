@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // SPDX-FileCopyrightText: 2026 Brice LECOLE
 
+pub mod a2l;
 pub mod commands;
 pub mod file_assoc;
 pub mod file_operations;
@@ -169,6 +170,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(StartupFile(Mutex::new(startup_path)))
+        .manage(a2l::A2lState::new())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -203,6 +205,13 @@ pub fn run() {
             commands::apply_file_associations,
             commands::get_startup_file,
             commands::copy_plain_text,
+            a2l::a2l_load,
+            a2l::a2l_unload,
+            a2l::a2l_list,
+            a2l::a2l_detail,
+            a2l::a2l_stats,
+            a2l::a2l_encode_value,
+            a2l::a2l_encode_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

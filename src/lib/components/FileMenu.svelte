@@ -15,6 +15,13 @@
     onSelectRange = () => {},
     canUndo       = false,    canRedo       = false,
     hasSelection  = false,
+    // ── A2L data view ─────────────────────────────────────────────────────────
+    viewMode    = 'hex',            // 'hex' | 'data'
+    onViewMode  = (_mode) => {},
+    a2lName     = '',               // basename of the loaded A2L, '' when none
+    a2lLoading  = false,
+    onLoadA2l   = () => {},
+    onUnloadA2l = () => {},
   } = $props();
 </script>
 
@@ -106,6 +113,59 @@
       <line x1="14" y1="13" x2="18.5" y2="13"/>
     </svg>
   </button>
+
+  <div class="divider"></div>
+
+  <!-- ── View mode ── data half stays disabled until an A2L is loaded -->
+  <div class="seg" role="group" aria-label="View mode">
+    <button
+      class="seg-btn"
+      class:on={viewMode === 'hex'}
+      onclick={() => onViewMode('hex')}
+      title="Hex and ASCII view"
+    >hex</button>
+    <button
+      class="seg-btn"
+      class:on={viewMode === 'data'}
+      onclick={() => onViewMode('data')}
+      disabled={!a2lName}
+      title={a2lName ? 'Physical data view' : 'Load an A2L file to enable the data view'}
+    >data</button>
+  </div>
+
+  <!-- ── A2L slot ── drop target when empty, chip when loaded -->
+  {#if a2lName}
+    <div class="a2l-chip" title={a2lName}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <polyline points="9 15 11 17 15 13"/>
+      </svg>
+      <span class="a2l-name">{a2lName}</span>
+      <button class="a2l-x" onclick={() => onUnloadA2l()}
+              title="Unload A2L" aria-label="Unload A2L file">×</button>
+    </div>
+  {:else}
+    <button class="a2l-drop" onclick={() => onLoadA2l()} disabled={a2lLoading}
+            title="Load associated A2L to enable data view — or drop an .a2l file anywhere">
+      {#if a2lLoading}
+        <svg class="spin" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        </svg>
+        <span>Loading…</span>
+      {:else}
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"/>
+          <polyline points="8 11 12 15 16 11"/>
+          <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+        </svg>
+        <span>Drop A2L</span>
+      {/if}
+    </button>
+  {/if}
 
   <div class="divider"></div>
 
@@ -281,10 +341,104 @@
     flex-shrink: 0;
   }
 
+  /* ── View-mode segmented control ── */
+  .seg {
+    display: flex;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .seg-btn {
+    background: transparent;
+    border: none;
+    color: #cccccc;
+    font-family: 'Cascadia Code', 'SF Mono', 'Courier New', monospace;
+    font-size: 11px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .seg-btn:hover:not(:disabled):not(.on) { background: #3c3c3c; color: #fff; }
+
+  .seg-btn.on {
+    background: #0e639c;
+    color: #ffffff;
+  }
+
+  .seg-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── A2L slot ── */
+  .a2l-drop, .a2l-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 4px;
+    font-family: 'Inter', -apple-system, sans-serif;
+    font-size: 11px;
+    flex-shrink: 0;
+    max-width: 190px;
+  }
+
+  .a2l-drop {
+    background: transparent;
+    border: 1px dashed #4a4a4a;
+    color: #999;
+    cursor: pointer;
+  }
+
+  .a2l-drop:hover:not(:disabled) { border-color: #007acc; color: #ccc; }
+  .a2l-drop:disabled { opacity: 0.5; cursor: default; }
+
+  .a2l-chip {
+    background: rgba(32, 208, 194, 0.13);
+    border: 1px solid rgba(32, 208, 194, 0.35);
+    color: #20d0c2;
+  }
+
+  .a2l-drop svg, .a2l-chip svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+  .a2l-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'Cascadia Code', 'SF Mono', monospace;
+    font-size: 10.5px;
+  }
+
+  .a2l-x {
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: 0.7;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 0 0 2px;
+    flex-shrink: 0;
+  }
+
+  .a2l-x:hover { opacity: 1; }
+
   @media (prefers-color-scheme: light) {
     .toolbar  { background: #f3f3f3; border-bottom-color: #ddd; }
     .icon-btn { color: #424242; }
     .icon-btn:hover:not(:disabled) { background: #e0e0e0; color: #1e1e1e; }
     .divider  { background: #ddd; }
+    .seg      { border-color: #c4c4c4; }
+    .seg-btn  { color: #424242; }
+    .seg-btn:hover:not(:disabled):not(.on) { background: #e0e0e0; color: #1e1e1e; }
+    .seg-btn.on { background: #0070c1; color: #fff; }
+    .a2l-drop { border-color: #c4c4c4; color: #777; }
+    .a2l-drop:hover:not(:disabled) { border-color: #0070c1; color: #333; }
+    .a2l-chip {
+      background: rgba(0, 128, 120, 0.10);
+      border-color: rgba(0, 128, 120, 0.35);
+      color: #00706a;
+    }
   }
 </style>

@@ -1,0 +1,13 @@
+[package]
+name = "a2l-data"
+version = "0.1.0"
+edition = "2021"
+description = "Decode and encode ECU calibration values from a hex image using an A2L description"
+license = "MIT"
+
+[dependencies]
+a2lfile = "3.5"
+serde = { version = "1", features = ["derive"] }
+
+[lints.rust]
+unexpected_cfgs = "allow"

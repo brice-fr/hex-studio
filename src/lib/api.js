@@ -106,3 +106,75 @@ export async function getFileAssociations() {
 export async function applyFileAssociations(changes) {
   return await invoke('apply_file_associations', { changes });
 }
+
+// ── A2L data view ───────────────────────────────────────────────────────────
+// The parsed A2L is held in Rust state, so `a2lLoad` must succeed before any
+// of the others will do anything.
+
+/**
+ * Parse an A2L description and keep it loaded for subsequent calls.
+ * @param {string} path  Absolute path to the .a2l file.
+ * @returns {Promise<Object>}  Summary: object counts, version, parse warnings.
+ */
+export async function a2lLoad(path) {
+  return invoke('a2l_load', { path });
+}
+
+/**
+ * Drop the loaded A2L description.
+ * @returns {Promise<void>}
+ */
+export async function a2lUnload() {
+  return invoke('a2l_unload');
+}
+
+/**
+ * Decode every described object against the current image.
+ * @param {Array} records
+ * @param {boolean} includeMeasurements  Also list RAM-resident MEASUREMENTs.
+ * @returns {Promise<Array>}  One row per object.
+ */
+export async function a2lList(records, includeMeasurements) {
+  return invoke('a2l_list', { records, includeMeasurements });
+}
+
+/**
+ * Full axis and value arrays for one 1D object.
+ * @param {string} name
+ * @param {Array}  records
+ * @returns {Promise<Object>}
+ */
+export async function a2lDetail(name, records) {
+  return invoke('a2l_detail', { name, records });
+}
+
+/**
+ * Coverage of the image by the A2L description.
+ * @param {Array} records
+ * @param {boolean} includeMeasurements
+ * @returns {Promise<Object>}
+ */
+export async function a2lStats(records, includeMeasurements) {
+  return invoke('a2l_stats', { records, includeMeasurements });
+}
+
+/**
+ * Encode a numeric physical value to bytes. Does NOT modify the image —
+ * apply the returned bytes with writeBytes so the edit joins the undo stack.
+ * @param {string} name
+ * @param {number} phys
+ * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
+ */
+export async function a2lEncodeValue(name, phys) {
+  return invoke('a2l_encode_value', { name, phys });
+}
+
+/**
+ * Encode a verbal (enumerated) physical value to bytes.
+ * @param {string} name
+ * @param {string} text
+ * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
+ */
+export async function a2lEncodeText(name, text) {
+  return invoke('a2l_encode_text', { name, text });
+}

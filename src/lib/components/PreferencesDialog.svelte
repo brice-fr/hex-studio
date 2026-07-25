@@ -7,9 +7,11 @@
     fontSize    = 13,
     bytesPerRow = 16,
     theme       = 'system',
+    showMeasurements = false,
     onFontSize    = (_n) => {},
     onBytesPerRow = (_n) => {},
     onTheme       = (_t) => {},
+    onShowMeasurements = (_v) => {},
     onClose       = () => {},
   } = $props();
 
@@ -91,6 +93,23 @@
                 onclick={() => onBytesPerRow(n)}
               >{n}</button>
             {/each}
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Data View</div>
+
+        <div class="pref-row">
+          <span class="pref-label">
+            Show MEASUREMENT objects
+            <span class="pref-hint">RAM signals, usually absent from a flash image</span>
+          </span>
+          <div class="segmented">
+            <button class="seg-btn" class:active={!showMeasurements}
+                    onclick={() => onShowMeasurements(false)}>Off</button>
+            <button class="seg-btn" class:active={showMeasurements}
+                    onclick={() => onShowMeasurements(true)}>On</button>
           </div>
         </div>
       </div>
@@ -186,6 +205,16 @@
     color: var(--c-text2);
     flex-shrink: 0;
     user-select: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .pref-hint {
+    font-size: 10.5px;
+    color: var(--c-dim);
+    line-height: 1.35;
+    max-width: 190px;
   }
 
   .segmented {

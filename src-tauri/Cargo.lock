@@ -3,6 +3,36 @@
 version = 4
 
 [[package]]
+name = "a2l-data"
+version = "0.1.0"
+dependencies = [
+ "a2lfile",
+ "serde",
+]
+
+[[package]]
+name = "a2lfile"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66b919d5d2959281846a4f0ff0eefb1fb98fbbf1a630f050a534431a5d503602"
+dependencies = [
+ "a2lmacros",
+ "fnv",
+ "num-traits",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "a2lmacros"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc77d245dcf8a4f9778211028972f706425ea4856cd43d5a3b1373d771eb5c1a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1587,6 +1617,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 name = "hex-studio"
 version = "0.2.5"
 dependencies = [
+ "a2l-data",
  "arboard",
  "core-foundation 0.9.4",
  "ihex",
