@@ -13,7 +13,7 @@
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
     getBytesRange, buildFill, randomBytes as genRandomBytes,
-    computeChecksum, numberToBytes, normalize,
+    computeChecksum, numberToBytes, normalize, findChecksumDefaults,
   } from '$lib/editOps.js';
   import FileMenu from '$lib/components/FileMenu.svelte';
   import HexViewer from '$lib/components/HexViewer.svelte';
@@ -32,6 +32,7 @@
   import MoveDialog     from '$lib/components/MoveDialog.svelte';
   import ChecksumDialog from '$lib/components/ChecksumDialog.svelte';
   import ImportMergeDialog from '$lib/components/ImportMergeDialog.svelte';
+  import SelectRangeDialog from '$lib/components/SelectRangeDialog.svelte';
 
   // ── Persistent settings — read synchronously before first render ──────────
   const LS = 'hex-studio.';
@@ -115,11 +116,18 @@
   let moveSelMin       = $state(0);
   let moveSelMax       = $state(0);
 
-  let showChecksum     = $state(false);
-  let checksumPrefMin  = $state(0);
-  let checksumPrefMax  = $state(0);
+  let showChecksum      = $state(false);
+  let checksumPrefMin   = $state(0);
+  let checksumPrefMax   = $state(0);
+  let checksumPrefTarget = $state(/** @type {number|null} */ (null));
 
   let showImportMerge  = $state(false);
+
+  let showSelectRange       = $state(false);
+  let selectRangePrefStart  = $state(0);
+  let selectRangePrefEnd    = $state(0);
+  let rangeTarget           = $state(/** @type {{start:number,end:number,seq:number}|null} */ (null));
+  let rangeTargetSeq        = 0;
 
   // ── Display preferences ────────────────────────────────────────────────────
   let fontSize        = $state(parseInt(lsGet('fontSize',    '13')));
@@ -253,8 +261,10 @@
   }
 
   function handleChecksumOpen() {
-    checksumPrefMin = hexSelection ? hexSelection.start : 0;
-    checksumPrefMax = hexSelection ? hexSelection.end   : 0;
+    const d = findChecksumDefaults(records);
+    checksumPrefMin    = d?.firstAddr  ?? 0;
+    checksumPrefMax    = d?.rangeEnd   ?? 0;
+    checksumPrefTarget = d?.targetAddr ?? null;
     showChecksum = true;
   }
 
@@ -266,6 +276,22 @@
     records = writeBytes(records, targetAddr, bytes);
     const hex = '0x' + val.toString(16).toUpperCase().padStart(width * 2, '0');
     status = `Inserted ${algo.toUpperCase()} checksum ${hex} at 0x${targetAddr.toString(16).toUpperCase().padStart(8,'0')}`;
+  }
+
+  function handleSelectRangeOpen() {
+    if (records.length === 0) return;
+    selectRangePrefStart = hexSelection ? hexSelection.start : addrRange.min;
+    selectRangePrefEnd   = hexSelection ? hexSelection.end   : addrRange.max;
+    showSelectRange = true;
+  }
+
+  function handleSelectRangeConfirm({ start, end }) {
+    showSelectRange  = false;
+    rangeTarget      = { start, end, seq: ++rangeTargetSeq };
+    inspectorAddress = start;
+    inspectorPinned  = true;
+    const n = end - start + 1;
+    status = `Selected ${n.toLocaleString()} byte${n === 1 ? '' : 's'}: 0x${start.toString(16).toUpperCase().padStart(8,'0')} – 0x${end.toString(16).toUpperCase().padStart(8,'0')}`;
   }
 
   function handleImportMergeConfirm({ importedRecords, mode }) {
@@ -301,6 +327,8 @@
       handlePaste(pasteAddr, 'overwrite');
       e.preventDefault(); return;
     }
+    // Select Range (Cmd/Ctrl+Shift+A)
+    if (mod && e.shiftKey && e.key === 'A') { handleSelectRangeOpen(); e.preventDefault(); return; }
     // Delete key — remove selection from address space
     if (e.key === 'Delete' && hexSelection && records.length > 0 && !mod) {
       handleDelete(hexSelection.start, hexSelection.end);
@@ -623,6 +651,8 @@
               await MenuItem.new({ id: 'edit-paste',  text: 'Paste',  accelerator: 'CmdOrCtrl+V', action: () => { if (binaryClipboard) handlePaste(hexSelection ? hexSelection.start : hexTopAddress, 'overwrite'); } }),
               await MenuItem.new({ id: 'edit-delete', text: 'Delete', action: () => { if (hexSelection) handleDelete(hexSelection.start, hexSelection.end); } }),
               await PredefinedMenuItem.new({ item: 'Separator' }),
+              await MenuItem.new({ id: 'edit-select-range', text: 'Select Range…', accelerator: 'CmdOrCtrl+Shift+A', action: () => { if (records.length > 0) handleSelectRangeOpen(); } }),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
               await MenuItem.new({ id: 'edit-fill',   text: 'Fill Selection…',   action: () => { if (hexSelection) handleFillOpen(hexSelection.start, hexSelection.end); } }),
               await MenuItem.new({ id: 'edit-move',   text: 'Move Selection…',   action: () => { if (hexSelection) handleMoveOpen(hexSelection.start, hexSelection.end); } }),
               await MenuItem.new({ id: 'edit-import-merge', text: 'Import from File…', action: () => { if (records.length > 0) showImportMerge = true; } }),
@@ -809,6 +839,7 @@
   {records}
   prefillMin={checksumPrefMin}
   prefillMax={checksumPrefMax}
+  prefillTarget={checksumPrefTarget}
   onInsert={handleChecksumInsert}
   onClose={() => (showChecksum = false)}
 />
@@ -817,6 +848,14 @@
   open={showImportMerge}
   onMerge={handleImportMergeConfirm}
   onClose={() => (showImportMerge = false)}
+/>
+
+<SelectRangeDialog
+  open={showSelectRange}
+  prefillStart={selectRangePrefStart}
+  prefillEnd={selectRangePrefEnd}
+  onSelect={handleSelectRangeConfirm}
+  onClose={() => (showSelectRange = false)}
 />
 
 {#if isDragging}
@@ -855,6 +894,7 @@
     onMove={() => { if (hexSelection) handleMoveOpen(hexSelection.start, hexSelection.end); }}
     onChecksum={handleChecksumOpen}
     onImportMerge={() => { if (records.length > 0) showImportMerge = true; }}
+    onSelectRange={handleSelectRangeOpen}
     hasSelection={hexSelection !== null}
   />
 
@@ -865,6 +905,7 @@
         {bytesPerRow}
         {fontSize}
         {gotoTarget}
+        {rangeTarget}
         onScrolled={() => { if (!loading && !saving) status = ''; }}
         onTopAddress={(addr) => { hexTopAddress = addr; }}
         onByteClick={handleByteClick}

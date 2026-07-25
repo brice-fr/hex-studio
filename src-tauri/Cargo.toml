@@ -1,6 +1,6 @@
 [package]
 name = "hex-studio"
-version = "0.2.3"
+version = "0.2.5"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -35,4 +35,9 @@ windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_Foundatio
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
+objc = "0.2"
+
+# objc = "0.2" uses #[cfg(cargo-clippy)] internally; suppress until the crate is updated.
+[lints.rust]
+unexpected_cfgs = "allow"
 

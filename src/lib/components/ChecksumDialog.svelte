@@ -13,15 +13,16 @@
    *   onInsert   – called with { lo, hi, algo, targetAddr, width, le }
    *   onClose    – called when the dialog should be dismissed
    */
-  import { computeChecksum } from '$lib/editOps.js';
+  import { computeChecksum, getByteAt, numberToBytes } from '$lib/editOps.js';
 
   let {
-    open       = false,
-    records    = [],
-    prefillMin = 0,
-    prefillMax = 0,
-    onInsert   = (_opts) => {},
-    onClose    = () => {},
+    open           = false,
+    records        = [],
+    prefillMin     = 0,
+    prefillMax     = 0,
+    prefillTarget  = /** @type {number|null} */ (null),
+    onInsert       = (_opts) => {},
+    onClose        = () => {},
   } = $props();
 
   let startHex  = $state('');
@@ -43,17 +44,41 @@
   const rangeValid  = $derived(lo !== null && hi !== null && hi >= lo);
   const targetValid = $derived(targetAddr !== null);
 
-  const algoMaxWidth = $derived(algo === 'xor' || algo === 'sum8' ? 1 : algo === 'crc16' ? 2 : 4);
+  const algoMaxWidth   = $derived(algo === 'xor' || algo === 'sum8' ? 1 : algo === 'crc16' ? 2 : 4);
+  const effectiveWidth = $derived(Math.min(width, algoMaxWidth));
+
+  // Live preview is skipped for very large address spans to keep the UI responsive.
+  // CRC over zero-filled gaps is O(span), so spans beyond this limit would stall.
+  const PREVIEW_LIMIT = 16 * 1024 * 1024; // 16 MB
+  const spanTooLarge  = $derived(rangeValid && (hi - lo + 1) > PREVIEW_LIMIT);
 
   const checksumVal = $derived.by(() => {
-    if (!rangeValid || records.length === 0) return null;
+    if (!rangeValid || spanTooLarge || records.length === 0) return null;
     return computeChecksum(records, lo, hi, algo);
   });
 
-  const checksumHex = $derived.by(() => {
+  const checksumBytes = $derived.by(() => {
+    if (!rangeValid)    return '—';
+    if (spanTooLarge)   return '(span > 16 MB)';
     if (checksumVal === null) return '—';
-    const effectiveWidth = Math.min(width, algoMaxWidth);
+    return numberToBytes(checksumVal, effectiveWidth, le)
+      .map(b => b.toString(16).toUpperCase().padStart(2, '0'))
+      .join(' ');
+  });
+
+  const checksumFull = $derived.by(() => {
+    if (!rangeValid || spanTooLarge || checksumVal === null) return null;
     return '0x' + checksumVal.toString(16).toUpperCase().padStart(effectiveWidth * 2, '0');
+  });
+
+  const actualContent = $derived.by(() => {
+    if (!targetValid) return null;
+    const parts = [];
+    for (let i = 0; i < effectiveWidth; i++) {
+      const b = getByteAt(records, targetAddr + i);
+      parts.push(b !== null ? b.toString(16).toUpperCase().padStart(2, '0') : '--');
+    }
+    return parts.join(' ');
   });
 
   const canInsert = $derived(rangeValid && targetValid);
@@ -63,10 +88,12 @@
     if (open) {
       startHex  = '0x' + prefillMin.toString(16).toUpperCase().padStart(8, '0');
       endHex    = '0x' + prefillMax.toString(16).toUpperCase().padStart(8, '0');
-      targetHex = '';
-      algo      = 'crc32';
-      width     = 4;
-      le        = true;
+      targetHex = prefillTarget !== null
+        ? '0x' + prefillTarget.toString(16).toUpperCase().padStart(8, '0')
+        : '';
+      algo  = 'crc32';
+      width = 4;
+      le    = true;
     }
   });
 
@@ -167,13 +194,22 @@
         bind:value={targetHex} placeholder="0x00010000 — write checksum here"
         spellcheck="false" autocomplete="off" />
 
+      <!-- Actual content at target address -->
+      <div class="preview-row">
+        <span class="preview-label">Actual content</span>
+        <span class="preview-val actual" class:valid={targetValid}>{actualContent ?? '—'}</span>
+        {#if targetValid}
+          <span class="preview-note">{effectiveWidth} byte{effectiveWidth > 1 ? 's' : ''} at 0x{targetAddr.toString(16).toUpperCase().padStart(8, '0')}</span>
+        {/if}
+      </div>
+
       <!-- Live preview -->
       <div class="preview-row">
         <span class="preview-label">Preview</span>
-        <span class="preview-val" class:valid={rangeValid}>{checksumHex}</span>
-        {#if rangeValid}
+        <span class="preview-val" class:valid={rangeValid}>{checksumBytes ?? '—'}</span>
+        {#if rangeValid && !spanTooLarge && checksumFull !== null}
           <span class="preview-note">
-            ({algo.toUpperCase()}, {Math.min(width, algoMaxWidth)} byte{Math.min(width, algoMaxWidth) > 1 ? 's' : ''}, {le ? 'LE' : 'BE'})
+            {checksumFull} ({algo.toUpperCase()}, {effectiveWidth} byte{effectiveWidth > 1 ? 's' : ''}, {le ? 'LE' : 'BE'})
           </span>
         {/if}
       </div>
@@ -349,9 +385,11 @@
   }
 
   .preview-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: baseline;
     background: var(--c-bg);
     border: 1px solid var(--c-border);
     border-radius: 5px;
@@ -362,7 +400,6 @@
   .preview-label {
     font-size: 11px;
     color: var(--c-muted);
-    flex-shrink: 0;
   }
 
   .preview-val {
@@ -376,10 +413,14 @@
     color: var(--c-accent-b);
   }
 
+  .preview-val.actual.valid {
+    color: var(--c-text);
+  }
+
   .preview-note {
+    grid-column: 2;
     font-size: 11px;
     color: var(--c-muted);
-    margin-left: auto;
   }
 
   .actions {

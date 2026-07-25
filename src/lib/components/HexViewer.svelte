@@ -7,7 +7,8 @@
     records = [], bytesPerRow = 16, fontSize = 13,
     onScrolled = () => {}, onTopAddress = (_addr) => {},
     onByteClick = (_addr) => {}, onSelectionChange = (_sel) => {},
-    gotoTarget = null,
+    gotoTarget   = null,
+    rangeTarget  = null,
     // ── Edit mode ────────────────────────────────────────────────────────────
     editable    = false,
     onEditByte  = (_addr, _byte) => {},
@@ -163,6 +164,25 @@
       scrollEl.scrollTop = newTop;
       scrollTop          = newTop;
       // Re-enable after the scroll event has fired
+      requestAnimationFrame(() => { suppressScrolled = false; });
+    }
+  });
+
+  // Set selection and scroll to start when rangeTarget changes
+  $effect(() => {
+    if (!rangeTarget || !scrollEl) return;
+    selAnchor = rangeTarget.start;
+    selFocus  = rangeTarget.end;
+    const rowIdx = rows.findIndex(
+      r => r.type === 'data' && r.address <= rangeTarget.start && rangeTarget.start < r.address + bytesPerRow
+    );
+    if (rowIdx >= 0) {
+      const newTop = rowIdx * ROW_HEIGHT;
+      if (throttleId !== null) { clearTimeout(throttleId); throttleId = null; }
+      rawScrollTop       = newTop;
+      suppressScrolled   = true;
+      scrollEl.scrollTop = newTop;
+      scrollTop          = newTop;
       requestAnimationFrame(() => { suppressScrolled = false; });
     }
   });

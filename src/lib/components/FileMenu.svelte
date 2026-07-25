@@ -10,10 +10,11 @@
     loading = false, saving = false, hasFile = false,
     // ── Edit operations ───────────────────────────────────────────────────────
     onUndo       = () => {}, onRedo       = () => {},
-    onFill       = () => {}, onMove       = () => {},
-    onChecksum   = () => {}, onImportMerge = () => {},
-    canUndo      = false,    canRedo       = false,
-    hasSelection = false,
+    onFill        = () => {}, onMove        = () => {},
+    onChecksum    = () => {}, onImportMerge = () => {},
+    onSelectRange = () => {},
+    canUndo       = false,    canRedo       = false,
+    hasSelection  = false,
   } = $props();
 </script>
 
@@ -129,6 +130,23 @@
   </button>
 
   <div class="divider"></div>
+
+  <!-- ── Select range ── enabled when a file is loaded -->
+  <button class="icon-btn" onclick={() => onSelectRange()} disabled={!hasFile}
+          title="Select range… (⌘⇧A)" aria-label="Select address range">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Selection bracket left -->
+      <path d="M7 4H4v16h3"/>
+      <!-- Selection bracket right -->
+      <path d="M17 4h3v16h-3"/>
+      <!-- Horizontal range line -->
+      <line x1="7" y1="12" x2="17" y2="12"/>
+      <!-- Small tick marks -->
+      <line x1="7"  y1="9" x2="7"  y2="15"/>
+      <line x1="17" y1="9" x2="17" y2="15"/>
+    </svg>
+  </button>
 
   <!-- ── Fill selection ── enabled when bytes are selected -->
   <button class="icon-btn" onclick={() => onFill()} disabled={!hasSelection}

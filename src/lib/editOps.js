@@ -196,6 +196,11 @@ export function randomBytes(length) {
 /**
  * Compute a checksum over the bytes in address range [lo, hi].
  * Gap addresses are treated as 0x00.
+ *
+ * Streams through the sorted data records directly — never allocates a flat
+ * buffer of (hi − lo + 1) bytes, so it is safe for sparse files whose segments
+ * span a wide virtual address space.
+ *
  * @param {Array}  records
  * @param {number} lo         Inclusive start address
  * @param {number} hi         Inclusive end address
@@ -203,45 +208,60 @@ export function randomBytes(length) {
  * @returns {number}
  */
 export function computeChecksum(records, lo, hi, algorithm) {
-  const bytes = getBytesRange(records, lo, hi);
-  switch (algorithm) {
-    case 'xor': {
-      let r = 0;
-      for (const b of bytes) r ^= b;
-      return r;
-    }
-    case 'sum8': {
-      let r = 0;
-      for (const b of bytes) r = (r + b) & 0xFF;
-      return r;
-    }
-    case 'crc16': {
-      // CRC-16/CCITT: poly=0x1021, init=0xFFFF, no reflect, no final XOR
-      let crc = 0xFFFF;
-      for (const b of bytes) {
-        crc ^= (b << 8);
-        for (let i = 0; i < 8; i++) {
-          if (crc & 0x8000) crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
-          else crc = (crc << 1) & 0xFFFF;
-        }
-      }
-      return crc;
-    }
-    case 'crc32': {
-      // CRC-32/ISO-HDLC: poly=0xEDB88320 (reflected), init=0xFFFFFFFF, finalXOR=0xFFFFFFFF
-      let crc = 0xFFFFFFFF;
-      for (const b of bytes) {
-        crc ^= b;
-        for (let i = 0; i < 8; i++) {
-          if (crc & 1) crc = (crc >>> 1) ^ 0xEDB88320;
-          else crc = crc >>> 1;
-        }
-      }
-      return (crc ^ 0xFFFFFFFF) >>> 0;
-    }
-    default:
-      return 0;
+  // Collect only the records that overlap [lo, hi], sorted by address
+  const relevant = [];
+  for (const r of records) {
+    if (!isDataRecord(r) || !r.data.length) continue;
+    if (r.address > hi || r.address + r.data.length - 1 < lo) continue;
+    relevant.push(r);
   }
+  relevant.sort((a, b) => a.address - b.address);
+
+  // XOR and sum8 are unaffected by zero bytes, so gaps can be skipped entirely
+  const gapsAreNoop = algorithm === 'xor' || algorithm === 'sum8';
+
+  let crc = algorithm === 'crc16' ? 0xFFFF : algorithm === 'crc32' ? 0xFFFFFFFF : 0;
+
+  /** Feed a single byte into the running state */
+  function feed(b) {
+    switch (algorithm) {
+      case 'xor':  crc ^= b; break;
+      case 'sum8': crc = (crc + b) & 0xFF; break;
+      case 'crc16':
+        crc ^= (b << 8);
+        for (let i = 0; i < 8; i++)
+          crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+        break;
+      case 'crc32':
+        crc ^= b;
+        for (let i = 0; i < 8; i++)
+          crc = (crc & 1) ? (crc >>> 1) ^ 0xEDB88320 : crc >>> 1;
+        break;
+    }
+  }
+
+  let addr = lo;
+  for (const rec of relevant) {
+    const from = Math.max(rec.address, lo);
+    const to   = Math.min(rec.address + rec.data.length - 1, hi);
+
+    // Gap before this record — feed zeros unless the algorithm ignores them
+    if (!gapsAreNoop) {
+      for (; addr < from; addr++) feed(0);
+    } else {
+      addr = from;
+    }
+
+    // Actual data bytes
+    for (let a = from; a <= to; a++, addr++) feed(rec.data[a - rec.address]);
+  }
+
+  // Trailing gap after last record
+  if (!gapsAreNoop) {
+    for (; addr <= hi; addr++) feed(0);
+  }
+
+  return algorithm === 'crc32' ? (crc ^ 0xFFFFFFFF) >>> 0 : crc;
 }
 
 /**
@@ -259,6 +279,70 @@ export function numberToBytes(value, width, littleEndian) {
     v >>>= 8;
   }
   return littleEndian ? bytes : bytes.reverse();
+}
+
+/**
+ * Compute smart defaults for the Insert Checksum dialog.
+ *
+ * Works directly with the records array — never builds a full address→byte Map,
+ * so it stays fast even for large firmware images.
+ *
+ * Returns { firstAddr, rangeEnd, targetAddr } where:
+ *   firstAddr  = address of the first data byte in the file (→ source start)
+ *   rangeEnd   = first of the last 5 consecutive data bytes (→ source end),
+ *                or last data address when no run of ≥5 consecutive bytes exists
+ *   targetAddr = second of the last 5 consecutive data bytes (→ write location),
+ *                or null when no run of ≥5 consecutive bytes exists
+ *
+ * Returns null when the file has no data at all.
+ *
+ * @param {Array} records
+ * @returns {{ firstAddr: number, rangeEnd: number, targetAddr: number|null }|null}
+ */
+export function findChecksumDefaults(records) {
+  // Collect sorted data records — O(n_records), not O(n_bytes)
+  const dataRecs = records.filter(r => isDataRecord(r) && r.data.length > 0);
+  if (dataRecs.length === 0) return null;
+  dataRecs.sort((a, b) => a.address - b.address);
+
+  const firstAddr = dataRecs[0].address;
+  const lastRec   = dataRecs[dataRecs.length - 1];
+  let rangeEnd    = lastRec.address + lastRec.data.length - 1; // fallback
+  let targetAddr  = null;
+
+  // Scan backward through records to find the last window of ≥5 consecutive bytes.
+  // Tracks a run extending from runTail backward; crosses record boundaries when
+  // two adjacent records are contiguous in address space.
+  let runTail = 0;
+  let runLen  = 0;
+
+  for (let i = dataRecs.length - 1; i >= 0; i--) {
+    const rec    = dataRecs[i];
+    const recEnd = rec.address + rec.data.length - 1;
+
+    if (runLen === 0) {
+      runTail = recEnd;
+      runLen  = rec.data.length;
+    } else {
+      const runHead = runTail - runLen + 1;
+      if (recEnd + 1 === runHead) {
+        // This record is immediately before the current run — extend it
+        runLen += rec.data.length;
+      } else {
+        // Gap — restart the run from this record
+        runTail = recEnd;
+        runLen  = rec.data.length;
+      }
+    }
+
+    if (runLen >= 5) {
+      rangeEnd   = runTail - 4; // 1st of the last 5 consecutive bytes
+      targetAddr = runTail - 3; // 2nd of the last 5 consecutive bytes
+      break;
+    }
+  }
+
+  return { firstAddr, rangeEnd, targetAddr };
 }
 
 /**
