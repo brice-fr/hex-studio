@@ -303,7 +303,11 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
                 let from = field.offset as usize;
                 if let Some(slice) = bytes.get(from..from + size) {
                     raw_hex = Some(hex_of(slice));
-                    if let Some(raw) = read_element(slice, field.datatype, plan.endian) {
+                    if let Some(stored) = read_element(slice, field.datatype, plan.endian) {
+                        // BIT_MASK selects bits of the stored word and shifts
+                        // them down; the conversion applies to that field, not
+                        // to the whole word.
+                        let raw = layout::mask_extract(stored, plan.bit_mask, field.datatype);
                         match plan.conv.conversion.to_phys(raw) {
                             Phys::Num(v) => {
                                 display = format_number(v, &fmt);
@@ -398,6 +402,11 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
         match plan.category {
             Category::Scalar if !plan.conv.conversion.is_invertible() => {
                 Some("conversion is not invertible — read only".to_string())
+            }
+            // Masking is applied per scalar value; an array of masked fields is
+            // rare and not handled, so say so rather than show wrong numbers.
+            Category::Curve if plan.bit_mask != 0 => {
+                Some("BIT_MASK on an array is not applied".to_string())
             }
             // Rewriting bytes we had to render as '.' would destroy them.
             Category::Ascii if !ascii_printable => {

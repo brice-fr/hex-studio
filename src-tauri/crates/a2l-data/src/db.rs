@@ -98,6 +98,9 @@ pub struct ObjectPlan {
     pub axis: AxisSource,
     /// The AXIS_DESCR attribute keyword, for display. Empty when there is none.
     pub axis_kind: &'static str,
+    /// A2L `BIT_MASK`: the bits of the stored word this object occupies.
+    /// 0 means the whole word, which is also the default.
+    pub bit_mask: u64,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -364,6 +367,7 @@ impl A2lDatabase {
             axis_conv,
             axis,
             axis_kind,
+            bit_mask: ch.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -418,6 +422,8 @@ impl A2lDatabase {
             axis_conv: None,
             axis: AxisSource::None,
             axis_kind: "",
+            // AXIS_PTS carries no BIT_MASK.
+            bit_mask: 0,
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -476,6 +482,7 @@ impl A2lDatabase {
             axis_conv: None,
             axis: AxisSource::None,
             axis_kind: "",
+            bit_mask: m.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,

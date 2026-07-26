@@ -213,13 +213,18 @@ pub fn a2l_stats(
 }
 
 /// Encode a numeric physical value into bytes for the caller to apply.
+///
+/// `records` is needed because a BIT_MASK field shares its word with other
+/// fields, so writing one is a read-modify-write over the current image.
 #[tauri::command]
 pub fn a2l_encode_value(
     name: String,
     phys: f64,
+    records: Vec<RecordData>,
     state: tauri::State<A2lState>,
 ) -> Result<EncodedWrite, String> {
-    with_db(&state, |db| encode::encode_scalar(db, &name, phys))
+    let image = RecordImage::from_records(&records);
+    with_db(&state, |db| encode::encode_scalar(db, &image, &name, phys))
 }
 
 /// Encode a textual value — an enum label or an ASCII string — into bytes.
@@ -227,9 +232,11 @@ pub fn a2l_encode_value(
 pub fn a2l_encode_text(
     name: String,
     text: String,
+    records: Vec<RecordData>,
     state: tauri::State<A2lState>,
 ) -> Result<EncodedWrite, String> {
-    with_db(&state, |db| encode::encode_text(db, &name, &text))
+    let image = RecordImage::from_records(&records);
+    with_db(&state, |db| encode::encode_text(db, &image, &name, &text))
 }
 
 #[cfg(test)]

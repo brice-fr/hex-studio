@@ -416,6 +416,82 @@ fn ascii_string_decodes_with_its_capacity() {
     assert_eq!(detail.value_unit, "", "nor in the parameter pane");
 }
 
+/// Three characteristics are different masked views of the single UWORD stored
+/// at 0x810002 (0x017F). Without BIT_MASK all three read 383, which sits
+/// outside the declared limits of two of them.
+#[test]
+fn bit_mask_fields_decode_to_their_own_view() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let find = |n: &str| rows.iter().find(|r| r.name == n).expect("row");
+
+    let whole = find("ASAM.C.SCALAR.UWORD.IDENTICAL");
+    let f0ff0 = find("ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0FF0");
+    let f0001 = find("ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0001");
+    let f0010 = find("ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0010");
+
+    // All four read the same word.
+    for r in [whole, f0ff0, f0001, f0010] {
+        assert_eq!(r.address, 0x810002, "{}", r.name);
+        assert_eq!(r.raw_hex.as_deref(), Some("7F 01"), "{}", r.name);
+    }
+
+    assert_eq!(whole.phys_num, Some(383.0), "0xFFFF selects the whole word");
+    assert_eq!(f0ff0.phys_num, Some(23.0), "(0x017F & 0x0FF0) >> 4");
+    assert_eq!(f0001.phys_num, Some(1.0), "(0x017F & 0x0001) >> 0");
+    assert_eq!(f0010.phys_num, Some(1.0), "(0x017F & 0x0010) >> 4");
+
+    // Each masked value must now sit inside its own declared limits, which the
+    // unmasked 383 did not.
+    for r in [whole, f0ff0, f0001, f0010] {
+        let v = r.phys_num.unwrap();
+        assert!(
+            v >= r.lower_limit && v <= r.upper_limit,
+            "{}: {v} outside {}..{}",
+            r.name,
+            r.lower_limit,
+            r.upper_limit
+        );
+    }
+}
+
+/// Writing one masked field must leave the other fields in the word intact.
+#[test]
+fn bit_mask_write_preserves_neighbouring_fields() {
+    let Some((db, img)) = open_demo() else { return };
+    let name = "ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0FF0";
+
+    // Stored word is 0x017F. Setting the 0x0FF0 field to 0xAB must give
+    // 0x0ABF: the new field, with the surrounding 0x000F untouched.
+    let w = a2l_data::encode::encode_scalar(&db, &img, name, 0xAB as f64).expect("encode");
+    assert_eq!(w.address, 0x810002);
+    assert_eq!(w.bytes, vec![0xBF, 0x0A], "little-endian 0x0ABF");
+    assert_eq!(w.raw, 0xAB as f64, "reads back as the field value");
+
+    // Setting the single low bit to 0 must clear only that bit.
+    let w = a2l_data::encode::encode_scalar(
+        &db,
+        &img,
+        "ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0001",
+        0.0,
+    )
+    .expect("encode");
+    assert_eq!(w.bytes, vec![0x7E, 0x01], "0x017F with bit 0 cleared");
+}
+
+/// A value too large for the field must be refused, not silently clipped into
+/// the neighbouring bits.
+#[test]
+fn bit_mask_write_rejects_a_value_wider_than_the_field() {
+    let Some((db, img)) = open_demo() else { return };
+    // The 0x0001 field holds one bit; 1 fits, 2 does not.
+    let name = "ASAM.C.SCALAR.UWORD.IDENTICAL.BITMASK_0001";
+    assert!(a2l_data::encode::encode_scalar(&db, &img, name, 1.0).is_ok());
+    let err = a2l_data::encode::encode_scalar(&db, &img, name, 2.0)
+        .expect_err("2 does not fit a one-bit field");
+    assert!(err.contains("masked field"), "unhelpful message: {err}");
+}
+
 /// Numeric parameters sharing that same conversion must keep their unit.
 #[test]
 fn numeric_scalars_keep_their_unit() {
@@ -464,8 +540,8 @@ fn ascii_write_rejects_overlong_and_non_printable_input() {
 /// encoder rather than the enum one.
 #[test]
 fn encode_text_routes_ascii_objects() {
-    let Some((db, _)) = open_demo() else { return };
-    let w = a2l_data::encode::encode_text(&db, "ASAM.C.ASCII.UBYTE.NUMBER_42", "Ok")
+    let Some((db, img)) = open_demo() else { return };
+    let w = a2l_data::encode::encode_text(&db, &img, "ASAM.C.ASCII.UBYTE.NUMBER_42", "Ok")
         .expect("should route to the ASCII encoder");
     assert_eq!(w.bytes.len(), 42);
     assert_eq!(&w.bytes[..2], b"Ok");
@@ -480,7 +556,7 @@ fn scalar_edits_round_trip_through_the_image() {
     let mut checked = 0;
     for row in rows.iter().filter(|r| r.editable && r.phys_num.is_some()) {
         let original = row.phys_num.unwrap();
-        let write = a2l_data::encode::encode_scalar(&db, &row.name, original)
+        let write = a2l_data::encode::encode_scalar(&db, &img, &row.name, original)
             .unwrap_or_else(|e| panic!("{} should encode: {e}", row.name));
 
         assert_eq!(write.bytes.len() as u32, row.byte_size, "{}", row.name);

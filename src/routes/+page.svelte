@@ -472,7 +472,7 @@
 
   async function handleA2lEditValue(name, phys) {
     try {
-      await applyA2lWrite(name, await a2lEncodeValue(name, phys));
+      await applyA2lWrite(name, await a2lEncodeValue(name, phys, records));
     } catch (err) {
       status = `Cannot write ${name}: ${err}`;
     }
@@ -480,7 +480,7 @@
 
   async function handleA2lEditText(name, text) {
     try {
-      await applyA2lWrite(name, await a2lEncodeText(name, text));
+      await applyA2lWrite(name, await a2lEncodeText(name, text, records));
     } catch (err) {
       status = `Cannot write ${name}: ${err}`;
     }

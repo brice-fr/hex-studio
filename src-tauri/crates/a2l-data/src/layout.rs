@@ -55,6 +55,64 @@ pub fn is_float(dt: DataType) -> bool {
     )
 }
 
+/// The bits a datatype actually occupies, as a mask.
+fn width_mask(dt: DataType) -> u64 {
+    let bits = datatype_size(dt) * 8;
+    if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
+
+/// Reinterpret the low bits of `v` as `dt`, sign-extending a signed type so the
+/// result matches what `read_element` would have produced for those bytes.
+fn from_storage(v: u64, dt: DataType) -> f64 {
+    let bits = datatype_size(dt) * 8;
+    if !is_signed(dt) {
+        return v as f64;
+    }
+    if bits < 64 && (v >> (bits - 1)) & 1 == 1 {
+        ((v | !width_mask(dt)) as i64) as f64
+    } else {
+        (v as i64) as f64
+    }
+}
+
+/// Extract an A2L `BIT_MASK` field and right-align it.
+///
+/// ASAP2 defines the mask as selecting bits which are then shifted down, so
+/// `BIT_MASK 0x0FF0` over a stored `0x017F` yields `0x17` = 23, not 383. The
+/// result is always non-negative: a bit field is unsigned however the
+/// surrounding datatype is declared.
+pub fn mask_extract(raw: f64, mask: u64, dt: DataType) -> f64 {
+    if mask == 0 || is_float(dt) {
+        return raw;
+    }
+    let bits = (raw as i64 as u64) & width_mask(dt);
+    ((bits & mask) >> mask.trailing_zeros()) as f64
+}
+
+/// Place `value` back into the masked bits of `current`, leaving every other
+/// bit of the stored word untouched — writing the field alone would otherwise
+/// clear the neighbouring bit fields sharing the same word.
+pub fn mask_insert(current: f64, value: f64, mask: u64, dt: DataType) -> f64 {
+    if mask == 0 || is_float(dt) {
+        return value;
+    }
+    let cur = (current as i64 as u64) & width_mask(dt);
+    let placed = ((value.round().max(0.0) as u64) << mask.trailing_zeros()) & mask;
+    from_storage((cur & !mask) | placed, dt)
+}
+
+/// The largest value a masked field can hold.
+pub fn mask_capacity(mask: u64) -> u64 {
+    if mask == 0 {
+        return 0;
+    }
+    mask >> mask.trailing_zeros()
+}
+
 /// Alignment borders per datatype class, from MOD_COMMON and optionally
 /// overridden by a RECORD_LAYOUT.
 #[derive(Debug, Clone, Copy)]
@@ -268,6 +326,68 @@ mod tests {
         assert_eq!(align_up(9, 1), 9);
         assert_eq!(align_up(9, 4), 12);
         assert_eq!(align_up(0, 8), 0);
+    }
+
+    /// The demo file's three masked views of the same stored word 0x017F.
+    #[test]
+    fn mask_extract_right_aligns_the_field() {
+        let raw = 383.0; // 0x017F
+        assert_eq!(mask_extract(raw, 0xFFFF, DataType::Uword), 383.0);
+        assert_eq!(mask_extract(raw, 0x0FF0, DataType::Uword), 23.0);
+        assert_eq!(mask_extract(raw, 0x0001, DataType::Uword), 1.0);
+        assert_eq!(mask_extract(raw, 0x0010, DataType::Uword), 1.0);
+    }
+
+    #[test]
+    fn mask_extract_is_a_passthrough_without_a_mask() {
+        assert_eq!(mask_extract(383.0, 0, DataType::Uword), 383.0);
+        // A mask over a float has no meaning and must not corrupt the value.
+        assert_eq!(mask_extract(1.5, 0x0FF0, DataType::Float32Ieee), 1.5);
+    }
+
+    /// Writing one field must leave its neighbours in the same word alone.
+    #[test]
+    fn mask_insert_preserves_surrounding_bits() {
+        let stored = 383.0; // 0x017F
+        // Set the 0x0FF0 field to 0: only those bits clear, 0x000F survives.
+        assert_eq!(mask_insert(stored, 0.0, 0x0FF0, DataType::Uword), 0x000F as f64);
+        // Set it to 0xAB: 0x0AB0 | 0x000F.
+        assert_eq!(mask_insert(stored, 0xAB as f64, 0x0FF0, DataType::Uword), 0x0ABF as f64);
+        // Clearing the low bit leaves 0x017E.
+        assert_eq!(mask_insert(stored, 0.0, 0x0001, DataType::Uword), 0x017E as f64);
+    }
+
+    #[test]
+    fn mask_round_trips() {
+        for (mask, value) in [(0x0FF0u64, 23.0), (0x0001, 1.0), (0x0010, 1.0), (0xFF00, 200.0)] {
+            let written = mask_insert(383.0, value, mask, DataType::Uword);
+            let read_back = mask_extract(written, mask, DataType::Uword);
+            assert_eq!(read_back, value, "mask 0x{mask:04X}");
+        }
+    }
+
+    /// Values wider than the field must not bleed into neighbouring bits.
+    #[test]
+    fn mask_insert_clips_an_overlarge_value() {
+        // 0x1FF does not fit the 8-bit 0x0FF0 field; only 0xFF may land.
+        let out = mask_insert(0.0, 0x1FF as f64, 0x0FF0, DataType::Uword);
+        assert_eq!(out, 0x0FF0 as f64, "excess bits must be masked away");
+    }
+
+    #[test]
+    fn mask_insert_sign_extends_a_signed_word() {
+        // Setting the top nibble of an SWORD to 0xF yields a negative value,
+        // matching what read_element would return for those bytes.
+        let out = mask_insert(0.0, 0xF as f64, 0xF000, DataType::Sword);
+        assert_eq!(out, -4096.0);
+    }
+
+    #[test]
+    fn mask_capacity_is_the_field_maximum() {
+        assert_eq!(mask_capacity(0x0FF0), 0xFF);
+        assert_eq!(mask_capacity(0x0001), 1);
+        assert_eq!(mask_capacity(0xFFFF), 0xFFFF);
+        assert_eq!(mask_capacity(0), 0);
     }
 
     #[test]

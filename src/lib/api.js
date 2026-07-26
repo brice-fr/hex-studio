@@ -108,6 +108,12 @@ export async function applyFileAssociations(changes) {
 }
 
 // ── A2L data view ───────────────────────────────────────────────────────────
+
+/**
+ * A parsed record from the loaded image.
+ * @typedef {{record_type: string, address: number, data: number[]}} HexRecord
+ */
+
 // The parsed A2L is held in Rust state, so `a2lLoad` must succeed before any
 // of the others will do anything.
 
@@ -130,9 +136,9 @@ export async function a2lUnload() {
 
 /**
  * Decode every described object against the current image.
- * @param {Array} records
+ * @param {HexRecord[]} records
  * @param {boolean} includeMeasurements  Also list RAM-resident MEASUREMENTs.
- * @returns {Promise<Array>}  One row per object.
+ * @returns {Promise<Object[]>}  One row per object.
  */
 export async function a2lList(records, includeMeasurements) {
   return invoke('a2l_list', { records, includeMeasurements });
@@ -141,7 +147,7 @@ export async function a2lList(records, includeMeasurements) {
 /**
  * Full axis and value arrays for one 1D object.
  * @param {string} name
- * @param {Array}  records
+ * @param {HexRecord[]}  records
  * @returns {Promise<Object>}
  */
 export async function a2lDetail(name, records) {
@@ -150,7 +156,7 @@ export async function a2lDetail(name, records) {
 
 /**
  * Coverage of the image by the A2L description.
- * @param {Array} records
+ * @param {HexRecord[]} records
  * @param {boolean} includeMeasurements
  * @returns {Promise<Object>}
  */
@@ -161,20 +167,25 @@ export async function a2lStats(records, includeMeasurements) {
 /**
  * Encode a numeric physical value to bytes. Does NOT modify the image —
  * apply the returned bytes with writeBytes so the edit joins the undo stack.
+ *
+ * `records` is required because a BIT_MASK field shares its stored word with
+ * other fields, so encoding one is a read-modify-write over the current image.
  * @param {string} name
  * @param {number} phys
+ * @param {HexRecord[]}  records
  * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
  */
-export async function a2lEncodeValue(name, phys) {
-  return invoke('a2l_encode_value', { name, phys });
+export async function a2lEncodeValue(name, phys, records) {
+  return invoke('a2l_encode_value', { name, phys, records });
 }
 
 /**
- * Encode a verbal (enumerated) physical value to bytes.
+ * Encode a verbal (enumerated) or ASCII string value to bytes.
  * @param {string} name
  * @param {string} text
+ * @param {HexRecord[]}  records
  * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
  */
-export async function a2lEncodeText(name, text) {
-  return invoke('a2l_encode_text', { name, text });
+export async function a2lEncodeText(name, text, records) {
+  return invoke('a2l_encode_text', { name, text, records });
 }
