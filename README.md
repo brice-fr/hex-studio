@@ -22,6 +22,20 @@ A fast, cross-platform hex editor for **Intel HEX**, **Motorola S-record**, and 
 - Non-printable bytes rendered as `.`
 - **Segment boundary visualisation** — non-contiguous memory regions are separated by a gap row showing the gap size and address range; leading blank cells show where a segment starts mid-row
 
+### In-Place Editing
+- **Type over any byte** — double-click a byte in either the hex or the ASCII column and type two hex digits. The cell highlights while the first nibble is pending, and the caret advances to the next byte once the pair completes. **Tab** confirms and advances, **Enter** confirms and stays, **Escape** cancels. Only bytes that exist can be edited; gaps between segments are not writable this way
+- **Undo / Redo** (⌘Z / ⌘⇧Z) — every operation below is one entry on a 50-step history; the window title carries a **●** while there are unsaved changes
+- **Cut / Paste / Delete** on a byte selection, through an internal binary clipboard kept separate from the system clipboard so it can hold raw bytes rather than text. Paste writes at the selection start, or at the top visible address when nothing is selected; the right-click menu additionally offers **paste into empty space only**
+- **Select Range…** (⌘⇧A) — select an exact address span by typing its start and end, for ranges too large to drag
+
+#### Edit Operations
+- **Fill Selection…** — repeat a hex pattern (`FF`, or `DE AD BE EF`) across the selection, or check **Randomize** to fill with random bytes. Warns when the pattern does not divide evenly into the range
+- **Move Selection…** — relocate the selected bytes to a new base address
+- **Import from File…** — merge an IHex, S-record or binary file into the current one, with a preview of the segments it would add
+- **Insert Checksum…** — compute **XOR**, **sum-8**, **CRC-16** or **CRC-32** over a range and write the result back into the image at a chosen address, with selectable width (1/2/4 bytes) and byte order (LE/BE). Start, end and target addresses are pre-filled from the file's own layout
+
+Fill, Move, Paste and Import each offer two write modes: **overwrite existing**, or **fill empty only** — the latter writes solely into address gaps, leaving existing data untouched.
+
 ### Copy Selection to Clipboard
 - **Right-click context menu** on any selected byte range offers six copy formats:
   - **Hex string (spaced)** — `4D 5A 90 00`
@@ -91,8 +105,10 @@ A fast, cross-platform hex editor for **Intel HEX**, **Motorola S-record**, and 
   - Linux: `xdg-mime default`
 
 ### User Interface
-- Native **macOS menu bar** — File (Open, Save as, Export as HTML, Import Binary, Compare with…), Search, View, Preferences
-- **Toolbar** with icon buttons: Open · Save · Export HTML · [divider] · Find · Go to Address · [divider] · Compare · [auto-spacer] · Settings
+- Native **macOS menu bar** — File (Open, Save as, Export as HTML, Import Binary, Compare with…), Edit (Undo, Redo, Cut, Paste, Delete, Select Range, Fill, Move, Import from File, Insert Checksum), Search, View, Preferences
+  - The system-injected **Writing Tools** and **AutoFill** items are removed from the Edit menu, which are meaningless for a hex editor
+- **Toolbar** with icon buttons: Open · Save · Export HTML · [divider] · Find · Go to Address · [divider] · Compare · [divider] · Undo · Redo · Select Range · Fill · Move · Checksum · Import Merge · [auto-spacer] · Settings
+  - Edit icons are **context-aware**: those needing a selection stay disabled until one exists, and Undo/Redo follow the history
 - **Status bar** — loading progress, navigation results; errors shown as native OS dialogs
 - **Window size and position** persisted across sessions via `tauri-plugin-window-state`; default launch size 925 × 460
 - OS window title updated with the currently open filename
@@ -151,13 +167,13 @@ Hot-reload is active for both the Svelte frontend and Rust backend.
 **macOS DMG:**
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/dmg/Hex Studio_0.2.4_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/Hex Studio_0.2.5_aarch64.dmg
 ```
 
 **Windows MSI** (requires Windows or GitHub Actions):
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/msi/Hex Studio_0.2.4_x64_en-US.msi
+# → src-tauri/target/release/bundle/msi/Hex Studio_0.2.5_x64_en-US.msi
 ```
 
 ### Automated releases via GitHub Actions
@@ -165,8 +181,8 @@ npm run tauri build
 Push a version tag to trigger a multi-platform build:
 
 ```bash
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.2.5
+git push origin v0.2.5
 ```
 
 The workflow (`.github/workflows/release.yml`) builds macOS and Windows bundles and publishes them as GitHub Release assets automatically.
@@ -180,6 +196,7 @@ hex-studio/
 ├── src/                          # SvelteKit frontend
 │   ├── lib/
 │   │   ├── api.js                # Tauri invoke abstraction layer
+│   │   ├── editOps.js            # Record-level edit primitives + checksums
 │   │   ├── hexHtmlExport.js      # Hex viewer HTML report generator
 │   │   └── components/
 │   │       ├── HexViewer.svelte        # Virtual-scrolling hex display + copy menu
@@ -194,7 +211,12 @@ hex-studio/
 │   │       ├── SegmentList.svelte      # Segment list side panel
 │   │       ├── DataInspector.svelte    # Data inspector side panel
 │   │       ├── PreferencesDialog.svelte# Preferences modal
-│   │       └── FileAssocDialog.svelte  # File associations modal
+│   │       ├── FileAssocDialog.svelte  # File associations modal
+│   │       ├── SelectRangeDialog.svelte# Select an address range by typing it
+│   │       ├── FillDialog.svelte       # Fill selection with pattern or random
+│   │       ├── MoveDialog.svelte       # Relocate selection to a new address
+│   │       ├── ChecksumDialog.svelte   # Checksum algorithm, width, endianness
+│   │       └── ImportMergeDialog.svelte# Merge another file into this one
 │   └── routes/
 │       ├── +page.svelte          # App shell and native menu
 │       └── compare/
