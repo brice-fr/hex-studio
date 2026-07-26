@@ -452,6 +452,22 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             .collect()
     };
 
+    // Read a referenced object's array — used when the axis lives in a separate
+    // AXIS_PTS object or in another curve.
+    let points_from = |p: &crate::db::ObjectPlan, field: Option<Field>| -> Vec<PointValue> {
+        let Some(field) = field else { return Vec::new() };
+        let b = src.read(p.address, p.byte_size()).unwrap_or_default();
+        if b.is_empty() {
+            return Vec::new();
+        }
+        let count = effective_points(p, Some(&b));
+        let mut raws = read_field(&b, Field { count, ..field }, p.endian);
+        if p.layout.axis_index_decr {
+            raws.reverse();
+        }
+        to_points(raws, &p.conv.conversion, &p.conv.format)
+    };
+
     // Function values.
     let values = match plan.layout.fnc.or(plan.layout.axis_pts) {
         Some(field) if !bytes.is_empty() => {
@@ -481,30 +497,25 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             }
             _ => Vec::new(),
         },
-        AxisSource::External(axis_name) => {
-            // A shared axis lives in its own AXIS_PTS object.
-            match db.plan_axis_pts(axis_name) {
-                Some(ap) => {
-                    let ap_bytes = src.read(ap.address, ap.byte_size()).unwrap_or_default();
-                    let ap_n = effective_points(
-                        &ap,
-                        if ap_bytes.is_empty() { None } else { Some(&ap_bytes) },
-                    );
-                    match ap.layout.axis_pts.or(ap.layout.fnc) {
-                        Some(field) if !ap_bytes.is_empty() => {
-                            let used = Field { count: ap_n, ..field };
-                            let mut raws = read_field(&ap_bytes, used, ap.endian);
-                            if ap.layout.axis_index_decr {
-                                raws.reverse();
-                            }
-                            to_points(raws, &ap.conv.conversion, &ap.conv.format)
-                        }
-                        _ => Vec::new(),
-                    }
-                }
-                None => Vec::new(),
-            }
-        }
+        // A shared axis lives in its own AXIS_PTS object, where the breakpoints
+        // are the axis field.
+        AxisSource::AxisPts(axis_name) => db
+            .plan_axis_pts(axis_name)
+            .map(|ap| {
+                let field = ap.layout.axis_pts.or(ap.layout.fnc);
+                points_from(&ap, field)
+            })
+            .unwrap_or_default(),
+
+        // CURVE_AXIS borrows another characteristic's *function* values as its
+        // breakpoints, so the preferred field is the other way round.
+        AxisSource::CurveRef(curve_name) => db
+            .plan_characteristic(curve_name)
+            .map(|cv| {
+                let field = cv.layout.fnc.or(cv.layout.axis_pts);
+                points_from(&cv, field)
+            })
+            .unwrap_or_default(),
         AxisSource::Fixed(values) => {
             let conv = axis_conv
                 .as_ref()
@@ -524,6 +535,8 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         values,
         axis_unit: axis_conv.map(|c| c.unit).unwrap_or_default(),
         value_unit: plan.conv.unit.clone(),
+        axis_kind: plan.axis_kind.to_string(),
+        axis_ref: plan.axis.reference().map(str::to_string),
         bytes,
     })
 }

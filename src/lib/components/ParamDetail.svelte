@@ -15,6 +15,7 @@
    *   onEditValue  – (phys: number) => void
    *   onEditText   – (text: string) => void
    *   onGoto       – (addr: number) => void   jump to the address in the hex view
+   *   onNavigate   – (name: string) => void   select another parameter
    */
   let {
     row         = null,
@@ -23,7 +24,17 @@
     onEditValue = (_phys) => {},
     onEditText  = (_text) => {},
     onGoto      = (_addr) => {},
+    onNavigate  = (_name) => {},
   } = $props();
+
+  /** How each AXIS_DESCR attribute stores its breakpoints, in plain words. */
+  const AXIS_KIND_LABEL = {
+    STD_AXIS: 'Standard — stored with this curve',
+    COM_AXIS: 'Common — shared axis object',
+    RES_AXIS: 'Rescale — shared axis object',
+    CURVE_AXIS: 'Curve — another curve’s values',
+    FIX_AXIS: 'Fixed — computed, not stored',
+  };
 
   /** Re-render a server-formatted number at the chosen precision. */
   function atPrecision(value, fallback) {
@@ -220,6 +231,26 @@
             <td class="v">{row.lower_limit} … {row.upper_limit}</td>
           </tr>
           <tr><td>Conversion</td><td class="v conv" title={row.conversion}>{row.conversion_type}</td></tr>
+          {#if detail?.axis_kind}
+            <tr>
+              <td>Axis</td>
+              <td class="v axis-kind" title={AXIS_KIND_LABEL[detail.axis_kind] ?? ''}>
+                {detail.axis_kind}
+              </td>
+            </tr>
+            {#if detail.axis_ref}
+              <tr>
+                <td>Axis data</td>
+                <td class="v">
+                  <button
+                    class="link ref"
+                    onclick={() => onNavigate(detail.axis_ref)}
+                    title="Show {detail.axis_ref}"
+                  >{detail.axis_ref}</button>
+                </td>
+              </tr>
+            {/if}
+          {/if}
           {#if row.point_count !== null && row.point_count !== undefined}
             <tr><td>Points</td><td class="v">{row.point_count}</td></tr>
           {/if}
@@ -454,6 +485,16 @@
   }
 
   .link:hover { color: var(--c-accent-t); }
+
+  /* Object names run long, so the reference wraps rather than overflowing. */
+  .ref {
+    text-align: right;
+    white-space: normal;
+    word-break: break-all;
+    line-height: 1.35;
+  }
+
+  .axis-kind { color: var(--c-text2); font-size: 11px; }
 
   .pres { font-size: 10.5px; }
   .pres.full    { color: var(--c-diff-cmp-only); }

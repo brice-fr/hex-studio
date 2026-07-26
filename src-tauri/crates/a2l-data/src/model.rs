@@ -142,6 +142,12 @@ pub struct ParamDetail {
     pub values: Vec<PointValue>,
     pub axis_unit: String,
     pub value_unit: String,
+    /// The AXIS_DESCR attribute keyword — `STD_AXIS`, `COM_AXIS`, `FIX_AXIS`,
+    /// `RES_AXIS` or `CURVE_AXIS`. Empty when the object has no axis.
+    pub axis_kind: String,
+    /// The object this axis defers to, for COM_AXIS/RES_AXIS (an AXIS_PTS) and
+    /// CURVE_AXIS (a characteristic). `None` when the axis is self-contained.
+    pub axis_ref: Option<String>,
     /// Raw bytes of the whole object, for the byte preview.
     pub bytes: Vec<u8>,
 }

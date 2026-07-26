@@ -64,10 +64,24 @@ pub enum AxisSource {
     None,
     /// Stored inside this object's own record (STD_AXIS).
     Internal,
-    /// Stored in a separate AXIS_PTS object (COM_AXIS).
-    External(String),
+    /// A shared AXIS_PTS object, named by AXIS_PTS_REF (COM_AXIS, RES_AXIS).
+    AxisPts(String),
+    /// Another characteristic's function values, named by CURVE_AXIS_REF
+    /// (CURVE_AXIS). Note this is a different reference field from the one
+    /// COM_AXIS uses, and points at a CHARACTERISTIC rather than an AXIS_PTS.
+    CurveRef(String),
     /// Computed from FIX_AXIS_PAR / _DIST / _LIST — occupies no image bytes.
     Fixed(Vec<f64>),
+}
+
+impl AxisSource {
+    /// The object this axis defers to, when it defers to one.
+    pub fn reference(&self) -> Option<&str> {
+        match self {
+            AxisSource::AxisPts(n) | AxisSource::CurveRef(n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 /// Everything needed to decode, encode or measure one A2L object.
@@ -82,6 +96,8 @@ pub struct ObjectPlan {
     pub conv: ConvInfo,
     pub axis_conv: Option<ConvInfo>,
     pub axis: AxisSource,
+    /// The AXIS_DESCR attribute keyword, for display. Empty when there is none.
+    pub axis_kind: &'static str,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -320,7 +336,7 @@ impl A2lDatabase {
             }
         }
 
-        let (axis, axis_conv) = self.axis_source(ch, category);
+        let (axis, axis_conv, axis_kind) = self.axis_source(ch, category);
 
         Some(ObjectPlan {
             name: name.to_string(),
@@ -332,6 +348,7 @@ impl A2lDatabase {
             conv,
             axis_conv,
             axis,
+            axis_kind,
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -385,6 +402,7 @@ impl A2lDatabase {
             conv,
             axis_conv: None,
             axis: AxisSource::None,
+            axis_kind: "",
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -442,6 +460,7 @@ impl A2lDatabase {
             conv,
             axis_conv: None,
             axis: AxisSource::None,
+            axis_kind: "",
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,
@@ -456,26 +475,35 @@ impl A2lDatabase {
         &self,
         ch: &Characteristic,
         category: Category,
-    ) -> (AxisSource, Option<ConvInfo>) {
+    ) -> (AxisSource, Option<ConvInfo>, &'static str) {
         if category != Category::Curve {
-            return (AxisSource::None, None);
+            return (AxisSource::None, None, "");
         }
         let Some(descr) = ch.axis_descr.first() else {
             // A VAL_BLK is 1D but has no axis.
-            return (AxisSource::None, None);
+            return (AxisSource::None, None, "");
         };
         let axis_conv = Some(self.conversion_for(&descr.conversion));
 
         use a2lfile::AxisDescrAttribute as A;
-        let source = match descr.attribute {
-            A::StdAxis => AxisSource::Internal,
-            A::ComAxis | A::ResAxis | A::CurveAxis => match &descr.axis_pts_ref {
-                Some(r) => AxisSource::External(r.axis_points.clone()),
-                None => AxisSource::None,
-            },
-            A::FixAxis => AxisSource::Fixed(fixed_axis_values(descr)),
+        let (source, kind) = match descr.attribute {
+            A::StdAxis => (AxisSource::Internal, "STD_AXIS"),
+            // COM_AXIS and RES_AXIS share an AXIS_PTS object…
+            A::ComAxis => (axis_pts_ref(descr), "COM_AXIS"),
+            A::ResAxis => (axis_pts_ref(descr), "RES_AXIS"),
+            // …whereas CURVE_AXIS borrows another curve's values through a
+            // different field entirely.
+            A::CurveAxis => (
+                descr
+                    .curve_axis_ref
+                    .as_ref()
+                    .map(|r| AxisSource::CurveRef(r.curve_axis.clone()))
+                    .unwrap_or(AxisSource::None),
+                "CURVE_AXIS",
+            ),
+            A::FixAxis => (AxisSource::Fixed(fixed_axis_values(descr)), "FIX_AXIS"),
         };
-        (source, axis_conv)
+        (source, axis_conv, kind)
     }
 
     /// All object names to list, in A2L declaration order.
@@ -513,6 +541,15 @@ impl A2lDatabase {
             .or_else(|| self.plan_axis_pts(name))
             .or_else(|| self.plan_measurement(name))
     }
+}
+
+/// The shared AXIS_PTS object an axis descriptor points at.
+fn axis_pts_ref(descr: &a2lfile::AxisDescr) -> AxisSource {
+    descr
+        .axis_pts_ref
+        .as_ref()
+        .map(|r| AxisSource::AxisPts(r.axis_points.clone()))
+        .unwrap_or(AxisSource::None)
 }
 
 /// FIX_AXIS breakpoints, which are computed rather than stored.

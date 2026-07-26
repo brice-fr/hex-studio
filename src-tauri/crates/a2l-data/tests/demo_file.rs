@@ -257,6 +257,80 @@ fn coverage_statistics_are_self_consistent() {
     assert!(s.present_full > 0, "demo image should contain real parameters");
 }
 
+/// COM_AXIS and RES_AXIS defer to a shared AXIS_PTS object via AXIS_PTS_REF.
+#[test]
+fn com_axis_curve_reports_its_shared_axis() {
+    let Some((db, img)) = open_demo() else { return };
+    let detail = decode::detail_for(&db, &img, "ASAM.C.CURVE.COM_AXIS").expect("detail");
+
+    assert_eq!(detail.axis_kind, "COM_AXIS");
+    assert_eq!(detail.axis_ref.as_deref(), Some("ASAM.C.AXIS_PTS.UBYTE_8"));
+    assert!(
+        !detail.axis.is_empty(),
+        "breakpoints should be read from the referenced AXIS_PTS object"
+    );
+}
+
+/// CURVE_AXIS is the trap: it uses CURVE_AXIS_REF, a different field from the
+/// one COM_AXIS uses, and points at a CHARACTERISTIC rather than an AXIS_PTS.
+/// Reading axis_pts_ref for it silently yields no axis at all.
+#[test]
+fn curve_axis_resolves_through_curve_axis_ref() {
+    let Some((db, img)) = open_demo() else { return };
+    let detail = decode::detail_for(&db, &img, "ASAM.C.CURVE.CURVE_AXIS").expect("detail");
+
+    assert_eq!(detail.axis_kind, "CURVE_AXIS");
+    assert_eq!(detail.axis_ref.as_deref(), Some("ASAM.C.CURVE_AXIS"));
+    assert!(
+        !detail.axis.is_empty(),
+        "breakpoints come from the referenced curve's function values"
+    );
+    // The reference must name a real object, or the link would go nowhere.
+    assert!(
+        db.plan_any("ASAM.C.CURVE_AXIS").is_some(),
+        "the referenced characteristic must be resolvable"
+    );
+}
+
+/// A self-contained axis has no reference to offer.
+#[test]
+fn std_and_fix_axes_report_no_reference() {
+    let Some((db, img)) = open_demo() else { return };
+
+    let std = decode::detail_for(&db, &img, "ASAM.C.CURVE.STD_AXIS").expect("detail");
+    assert_eq!(std.axis_kind, "STD_AXIS");
+    assert_eq!(std.axis_ref, None);
+
+    let fix = decode::detail_for(&db, &img, "ASAM.C.CURVE.FIX_AXIS.PAR").expect("detail");
+    assert_eq!(fix.axis_kind, "FIX_AXIS");
+    assert_eq!(fix.axis_ref, None);
+    assert!(!fix.axis.is_empty(), "FIX_AXIS points are computed, not stored");
+}
+
+/// Every axis reference in the file must resolve, so no link is ever dead.
+#[test]
+fn all_axis_references_resolve_to_a_listed_object() {
+    let Some((db, img)) = open_demo() else { return };
+    let listed: std::collections::HashSet<String> = db
+        .object_names(true)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+
+    let mut checked = 0;
+    for (name, _) in db.object_names(false) {
+        let Some(detail) = decode::detail_for(&db, &img, &name) else { continue };
+        if let Some(r) = detail.axis_ref {
+            assert!(
+                listed.contains(&r),
+                "{name} references '{r}', which is not a listed object"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 3, "expected several axis references, saw {checked}");
+}
+
 /// The demo file's ASCII characteristic is a 42-byte array holding
 /// "ASAM Test" followed by NUL padding.
 #[test]

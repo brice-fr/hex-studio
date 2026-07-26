@@ -2,6 +2,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Brice LECOLE -->
 
 <script>
+  import { tick } from 'svelte';
   import ParamDetail from './ParamDetail.svelte';
 
   /**
@@ -350,6 +351,25 @@
   function handleKey(e, name) {
     if (e.key === 'Enter' || e.key === ' ') { onSelect(name); e.preventDefault(); }
   }
+
+  /**
+   * Jump to another parameter, e.g. the axis a curve refers to.
+   *
+   * The target may be filtered out of view — a shared AXIS_PTS object is not in
+   * the "1D curves" category the user was probably browsing — so the filters are
+   * cleared first, then the row is centred.
+   */
+  async function navigateTo(name) {
+    query = '';
+    category = 'all';
+    onSelect(name);
+    await tick();
+    const idx = filtered.findIndex((r) => r.name === name);
+    if (idx < 0 || !scrollEl) return;
+    const top = Math.max(0, idx * ROW_H - viewportH / 2 + ROW_H / 2);
+    scrollEl.scrollTop = top;
+    scrollTop = top;
+  }
 </script>
 
 <div class="data-view" style="--fs: {fontSize}px; --gt: {gridTemplate}">
@@ -552,6 +572,7 @@
         onEditValue={(phys) => selectedRow && onEditValue(selectedRow.name, phys)}
         onEditText={(text) => selectedRow && onEditText(selectedRow.name, text)}
         {onGoto}
+        onNavigate={navigateTo}
       />
     </aside>
   </div>
