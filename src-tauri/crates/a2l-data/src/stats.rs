@@ -55,8 +55,19 @@ pub fn compute(
             Category::Scalar => s.scalars += 1,
             Category::Curve => s.curves += 1,
             Category::Ascii => s.strings += 1,
+            Category::Virtual => s.virtuals += 1,
             Category::Unsupported => s.unsupported += 1,
         }
+
+        // A computed parameter occupies no image bytes and its declared address
+        // is a placeholder — every VIRTUAL_CHARACTERISTIC in the demo file says
+        // 0x0. Counting it as absent would overstate what is missing, and
+        // taking its extent would credit the description with bytes at address
+        // zero that it does not describe at all.
+        if plan.category == Category::Virtual {
+            continue;
+        }
+
         match presence_of(src, &plan) {
             Presence::Full => s.present_full += 1,
             Presence::Partial => s.present_partial += 1,

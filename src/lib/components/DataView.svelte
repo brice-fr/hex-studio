@@ -50,6 +50,7 @@
     scalar: '·',   // middle dot — the quiet, ordinary case
     curve: '∿',    // sine wave
     ascii: '"',    // quote mark for a character array
+    virtual: 'ƒ',  // computed by a formula
     unsupported: '!',
   };
 
@@ -299,14 +300,23 @@
   let scrollTop = $state(0);
   let viewportH = $state(400);
 
+  /** A computed parameter was never meant to be in the image. */
+  const isVirtual = (r) => r.category === 'virtual';
+  /** Declared somewhere real, but those bytes are not in this image. */
+  const isMissing = (r) => r.presence === 'absent' && !isVirtual(r);
+
   const counts = $derived.by(() => {
-    const c = { all: rows.length, scalar: 0, curve: 0, ascii: 0, unsupported: 0, absent: 0 };
+    const c = {
+      all: rows.length, scalar: 0, curve: 0, ascii: 0,
+      virtual: 0, unsupported: 0, absent: 0,
+    };
     for (const r of rows) {
       if (r.category === 'scalar')           c.scalar++;
       else if (r.category === 'curve')       c.curve++;
       else if (r.category === 'ascii')       c.ascii++;
+      else if (r.category === 'virtual')     c.virtual++;
       else if (r.category === 'unsupported') c.unsupported++;
-      if (r.presence === 'absent')           c.absent++;
+      if (isMissing(r))                      c.absent++;
     }
     return c;
   });
@@ -315,7 +325,7 @@
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
       if (category === 'absent') {
-        if (r.presence !== 'absent') return false;
+        if (!isMissing(r)) return false;
       } else if (category !== 'all' && r.category !== category) {
         return false;
       }
@@ -413,6 +423,7 @@
         { id: 'scalar',      label: 'Scalars',     n: counts.scalar },
         { id: 'curve',       label: '1D curves',   n: counts.curve },
         { id: 'ascii',       label: 'Strings',     n: counts.ascii },
+        { id: 'virtual',     label: 'Virtual',     n: counts.virtual },
         { id: 'unsupported', label: 'Unsupported', n: counts.unsupported },
         { id: 'absent',      label: 'Not in image', n: counts.absent },
       ] as cat}
@@ -520,7 +531,7 @@
                 <div
                   class="row"
                   class:sel={row.name === selected}
-                  class:muted={row.presence === 'absent'}
+                  class:muted={isMissing(row)}
                   role="button"
                   tabindex="0"
                   onclick={() => onSelect(row.name)}
@@ -531,7 +542,9 @@
                       class="glyph {row.category}"
                       aria-hidden="true"
                     >{CATEGORY_GLYPH[row.category] ?? '·'}</span>{row.name}</span>
-                  {#if showAddress}<span class="c-addr">{hex32(row.address)}</span>{/if}
+                  <!-- A computed parameter's declared address is a placeholder,
+                       so showing 0x00000000 would only mislead. -->
+                  {#if showAddress}<span class="c-addr">{isVirtual(row) ? '—' : hex32(row.address)}</span>{/if}
                   {#if showType}<span class="c-type">{row.datatype}</span>{/if}
                   {#if showRaw}<span class="c-raw r">{row.raw_hex ?? '—'}</span>{/if}
                   <span class="c-phys r">
@@ -899,6 +912,7 @@
   }
 
   .glyph.scalar      { color: var(--c-dim); }
+  .glyph.virtual     { color: var(--c-diff-ref-only); }
   .glyph.unsupported { color: var(--c-diff-changed); }
 
   /* Address, Type and Raw are supporting detail: same small size so none of

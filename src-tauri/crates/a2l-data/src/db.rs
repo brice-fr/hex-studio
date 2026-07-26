@@ -101,6 +101,9 @@ pub struct ObjectPlan {
     /// A2L `BIT_MASK`: the bits of the stored word this object occupies.
     /// 0 means the whole word, which is also the default.
     pub bit_mask: u64,
+    /// For a VIRTUAL_CHARACTERISTIC: the formula and the parameters it reads.
+    pub virtual_formula: Option<String>,
+    pub virtual_inputs: Vec<String>,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -368,6 +371,12 @@ impl A2lDatabase {
             axis,
             axis_kind,
             bit_mask: ch.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
+            virtual_formula: ch.virtual_characteristic.as_ref().map(|v| v.formula.clone()),
+            virtual_inputs: ch
+                .virtual_characteristic
+                .as_ref()
+                .map(|v| v.characteristic_list.clone())
+                .unwrap_or_default(),
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -424,6 +433,8 @@ impl A2lDatabase {
             axis_kind: "",
             // AXIS_PTS carries no BIT_MASK.
             bit_mask: 0,
+            virtual_formula: None,
+            virtual_inputs: Vec::new(),
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -483,6 +494,8 @@ impl A2lDatabase {
             axis: AxisSource::None,
             axis_kind: "",
             bit_mask: m.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
+            virtual_formula: None,
+            virtual_inputs: Vec::new(),
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,
@@ -599,6 +612,12 @@ fn classify_characteristic(
     ch: &Characteristic,
     rl: Option<&RecordLayout>,
 ) -> (Category, Option<String>) {
+    // A computed parameter is never stored. Its address is a placeholder — all
+    // four in the demo file declare 0x0 — so it must not be treated as data
+    // that merely happens to be missing from the image.
+    if ch.virtual_characteristic.is_some() {
+        return (Category::Virtual, None);
+    }
     // A record layout with Y or higher dimensions is multi-dimensional
     // regardless of what the characteristic type claims.
     if let Some(rl) = rl {

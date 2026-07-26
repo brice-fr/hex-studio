@@ -234,11 +234,14 @@ fn coverage_statistics_are_self_consistent() {
 
     assert_eq!(s.total_objects, 89);
     assert_eq!(
-        s.scalars + s.curves + s.strings + s.unsupported,
+        s.scalars + s.curves + s.strings + s.virtuals + s.unsupported,
         s.total_objects
     );
     assert!(s.strings > 0, "the demo file declares an ASCII string");
-    assert_eq!(s.present_full + s.present_partial + s.absent, s.total_objects);
+    assert_eq!(
+        s.present_full + s.present_partial + s.absent + s.virtuals,
+        s.total_objects
+    );
 
     assert_eq!(s.image_bytes, img.total_bytes());
     assert!(
@@ -414,6 +417,68 @@ fn ascii_string_decodes_with_its_capacity() {
 
     let detail = decode::detail_for(&db, &img, "ASAM.C.ASCII.UBYTE.NUMBER_42").expect("detail");
     assert_eq!(detail.value_unit, "", "nor in the parameter pane");
+}
+
+/// A VIRTUAL_CHARACTERISTIC is computed and never stored. All four in the demo
+/// file declare address 0x0, so they must not be mistaken for data that merely
+/// happens to be missing from the image.
+#[test]
+fn virtual_characteristics_are_their_own_category() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let virtuals: Vec<_> = rows
+        .iter()
+        .filter(|r| r.category == Category::Virtual)
+        .collect();
+
+    assert_eq!(virtuals.len(), 4, "demo file declares four virtual parameters");
+    for r in &virtuals {
+        assert_eq!(r.address, 0, "the declared address is a placeholder");
+        assert!(!r.editable, "{}: a computed value cannot be written", r.name);
+        assert!(
+            r.formula.is_some(),
+            "{}: the formula is what there is to show",
+            r.name
+        );
+        // The formula is shown instead of "absent", which would misdescribe it.
+        assert_ne!(r.display, "absent", "{}", r.name);
+    }
+
+    // REF_3 reads the two other virtual parameters; those links must resolve.
+    let ref3 = virtuals
+        .iter()
+        .find(|r| r.name == "ASAM.C.VIRTUAL.REF_3.SWORD")
+        .expect("REF_3 present");
+    let deps = ref3.depends_on.as_ref().expect("inputs listed");
+    assert_eq!(deps.len(), 2);
+    for d in deps {
+        assert!(db.plan_any(d).is_some(), "input '{d}' should resolve");
+    }
+}
+
+/// The presence tallies describe objects that are meant to occupy image bytes,
+/// so a computed parameter belongs in none of them.
+#[test]
+fn virtuals_are_excluded_from_presence_and_coverage() {
+    let Some((db, img)) = open_demo() else { return };
+    let s = stats::compute(&db, &img, false);
+
+    assert_eq!(s.virtuals, 4);
+    assert_eq!(
+        s.present_full + s.present_partial + s.absent + s.virtuals,
+        s.total_objects,
+        "every object is either placed in the image or computed"
+    );
+
+    // Their extent must not be credited to the description. All four sit at
+    // address 0, which no segment of this image covers, so any contribution
+    // would show up as described bytes that describe nothing.
+    let described_at_zero = img.present_count(0, 64);
+    assert_eq!(described_at_zero, 0, "no image data at address 0");
+    assert!(
+        s.described_bytes > 0 && s.described_present_bytes <= s.described_bytes,
+        "coverage stays self-consistent"
+    );
 }
 
 /// Three characteristics are different masked views of the single UWORD stored

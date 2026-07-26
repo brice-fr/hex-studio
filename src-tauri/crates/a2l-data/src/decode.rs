@@ -379,6 +379,16 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
             }
         }
 
+        // Computed from other parameters, so there is nothing to read. Showing
+        // the formula is more use than showing "absent" for a value that was
+        // never meant to be stored.
+        Category::Virtual => {
+            display = plan
+                .virtual_formula
+                .clone()
+                .unwrap_or_else(|| "computed".to_string());
+        }
+
         Category::Unsupported => {
             if presence == Presence::Absent {
                 display = "absent".into();
@@ -440,6 +450,8 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
         phys_min,
         phys_max,
         enum_options: plan.conv.conversion.enum_options(),
+        formula: plan.virtual_formula.clone(),
+        depends_on: (!plan.virtual_inputs.is_empty()).then(|| plan.virtual_inputs.clone()),
         text_value,
         text_capacity,
         text_max_len,

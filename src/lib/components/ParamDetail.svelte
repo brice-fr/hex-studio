@@ -69,7 +69,8 @@
   });
 
   const isEnum   = $derived(!!row?.enum_options);
-  const isText   = $derived(row?.category === 'ascii');
+  const isText    = $derived(row?.category === 'ascii');
+  const isVirtual = $derived(row?.category === 'virtual');
   /** Characters left before the field is full. */
   const textLeft = $derived(
     isText && row?.text_max_len != null ? row.text_max_len - draft.length : 0
@@ -246,10 +247,25 @@
           <button class="apply" onclick={commit}>Apply</button>
         {/if}
       {:else}
-        <div class="value-static" class:out={outLimit}>
-          <span class="v">{atPrecision(row.phys_num, row.display)}</span>
-          {#if row.unit}<span class="unit">{row.unit}</span>{/if}
-        </div>
+        {#if isVirtual}
+          <!-- Computed from other parameters, so there is no stored value to
+               show — the formula and its inputs are the useful content. -->
+          <div class="formula">{row.formula ?? 'computed'}</div>
+          {#if row.depends_on?.length}
+            <div class="deps">
+              <span class="deps-label">Reads</span>
+              {#each row.depends_on as dep}
+                <button class="link ref" onclick={() => onNavigate(dep)}
+                        title="Show {dep}">{dep}</button>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <div class="value-static" class:out={outLimit}>
+            <span class="v">{atPrecision(row.phys_num, row.display)}</span>
+            {#if row.unit}<span class="unit">{row.unit}</span>{/if}
+          </div>
+        {/if}
         {#if row.note}
           <div class="note">{row.note}</div>
         {/if}
@@ -258,15 +274,21 @@
       <!-- ── Facts ── -->
       <table class="facts">
         <tbody>
-          <tr>
-            <td>Address</td>
-            <td class="v">
-              <button class="link" onclick={() => onGoto(row.address)}
-                      title="Show in hex view">{hex32(row.address)}</button>
-            </td>
-          </tr>
+          {#if isVirtual}
+            <!-- No storage, so an address, a size and a presence would all be
+                 fictions. The A2L declares 0x0 purely to satisfy the syntax. -->
+            <tr><td>Storage</td><td class="v virt">not stored</td></tr>
+          {:else}
+            <tr>
+              <td>Address</td>
+              <td class="v">
+                <button class="link" onclick={() => onGoto(row.address)}
+                        title="Show in hex view">{hex32(row.address)}</button>
+              </td>
+            </tr>
+            <tr><td>Size</td><td class="v">{row.byte_size} B</td></tr>
+          {/if}
           <tr><td>Type</td><td class="v">{row.datatype}</td></tr>
-          <tr><td>Size</td><td class="v">{row.byte_size} B</td></tr>
           {#if row.text_capacity}
             <tr>
               <td>Capacity</td>
@@ -304,12 +326,14 @@
           {#if row.point_count !== null && row.point_count !== undefined}
             <tr><td>Points</td><td class="v">{row.point_count}</td></tr>
           {/if}
-          <tr>
-            <td>In image</td>
-            <td class="v">
-              <span class="pres {row.presence}">{row.presence}</span>
-            </td>
-          </tr>
+          {#if !isVirtual}
+            <tr>
+              <td>In image</td>
+              <td class="v">
+                <span class="pres {row.presence}">{row.presence}</span>
+              </td>
+            </tr>
+          {/if}
         </tbody>
       </table>
 
@@ -567,6 +591,38 @@
   }
 
   .axis-kind { color: var(--c-text2); font-size: 11px; }
+  .virt { color: var(--c-diff-ref-only); font-size: 11px; }
+
+  /* ── Computed parameter ── */
+  .formula {
+    margin-top: 10px;
+    padding: 6px 8px;
+    background: var(--c-surface);
+    border-left: 2px solid var(--c-diff-ref-only);
+    border-radius: 0;
+    font-size: 12px;
+    color: var(--c-text);
+    word-break: break-word;
+    line-height: 1.4;
+  }
+
+  .deps {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    margin-top: 7px;
+  }
+
+  .deps-label {
+    font-family: 'Inter', sans-serif;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--c-muted);
+  }
+
+  .deps .ref { text-align: left; }
 
   .pres { font-size: 10.5px; }
   .pres.full    { color: var(--c-diff-cmp-only); }

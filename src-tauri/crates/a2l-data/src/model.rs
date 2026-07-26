@@ -55,6 +55,9 @@ pub enum Category {
     Curve,
     /// A fixed-width character array (A2L `ASCII`).
     Ascii,
+    /// A2L `VIRTUAL_CHARACTERISTIC`: computed from other parameters by a
+    /// formula and never stored, so its declared address is a placeholder.
+    Virtual,
     /// Recognised but not decodable in this milestone (maps, cuboids, formulas).
     Unsupported,
 }
@@ -107,6 +110,10 @@ pub struct ParamRow {
     pub phys_max: Option<f64>,
     /// Choices for a TAB_VERB parameter, so the UI can offer a dropdown.
     pub enum_options: Option<Vec<String>>,
+    /// The VIRTUAL_CHARACTERISTIC formula, for a computed parameter.
+    pub formula: Option<String>,
+    /// Parameters that formula reads, so the UI can link to them.
+    pub depends_on: Option<Vec<String>>,
     /// Decoded text of an ASCII characteristic, up to the first NUL.
     pub text_value: Option<String>,
     /// Total bytes the character array occupies.
@@ -172,6 +179,9 @@ pub struct CoverageStats {
     pub scalars: usize,
     pub curves: usize,
     pub strings: usize,
+    /// Computed parameters. Counted apart from the presence tallies below,
+    /// which only describe objects that are meant to occupy image bytes.
+    pub virtuals: usize,
     pub unsupported: usize,
     pub present_full: usize,
     pub present_partial: usize,
