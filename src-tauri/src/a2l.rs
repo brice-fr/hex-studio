@@ -300,7 +300,8 @@ pub fn cdfx_export(
         .file_stem()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "CalibrationData".to_string());
-    let xml = cdfx::write(&short_name, &instances)?;
+    let creator = concat!("Hex Studio ", env!("CARGO_PKG_VERSION"));
+    let xml = cdfx::write(&short_name, creator, &instances)?;
     std::fs::write(&path, xml).map_err(|e| format!("cannot write '{path}': {e}"))?;
     Ok(instances.len())
 }

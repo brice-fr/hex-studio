@@ -1097,7 +1097,7 @@ fn exported_cdfx_round_trips_against_the_image() {
     let instances = a2l_data::sync::export(&db, &img);
     assert!(instances.len() > 50, "got {}", instances.len());
 
-    let xml = a2l_data::cdfx::write("hex-studio-export", &instances).expect("write");
+    let xml = a2l_data::cdfx::write("hex-studio-export", "test", &instances).expect("write");
     let reparsed = a2l_data::cdfx::parse(&xml).expect("reparse our own output");
     assert_eq!(reparsed.instances.len(), instances.len());
 

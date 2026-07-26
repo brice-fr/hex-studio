@@ -275,7 +275,17 @@ fn decode_text(t: &BytesText) -> Result<String, String> {
 /// groups, revision history, unit declarations beyond the display name. That is
 /// a deliberate limit: this crate does not model those, and inventing them
 /// would put invented provenance in the file.
-pub fn write(short_name: &str, instances: &[CdfxInstance]) -> Result<String, String> {
+/// Serialise instances as a CDFX document.
+///
+/// `creator` names the application that produced the file, version included —
+/// it is passed in rather than taken from this crate's own `CARGO_PKG_VERSION`,
+/// which would stamp every export with the library's version number and read
+/// to anyone opening the file as the application's.
+pub fn write(
+    short_name: &str,
+    creator: &str,
+    instances: &[CdfxInstance],
+) -> Result<String, String> {
     let mut w = Writer::new_with_indent(Vec::new(), b'\t', 1);
     let err = |e: std::io::Error| format!("write error: {e}");
 
@@ -291,8 +301,7 @@ pub fn write(short_name: &str, instances: &[CdfxInstance]) -> Result<String, Str
     .map_err(err)?;
 
     let mut msrsw = BytesStart::new("MSRSW");
-    msrsw.push_attribute(("CREATOR", "Hex Studio"));
-    msrsw.push_attribute(("CREATOR-VERSION", env!("CARGO_PKG_VERSION")));
+    msrsw.push_attribute(("CREATOR", creator));
     w.write_event(Event::Start(msrsw)).map_err(err)?;
 
     text_el(&mut w, "SHORT-NAME", short_name)?;
@@ -559,7 +568,7 @@ mod tests {
             .cloned()
             .collect();
 
-        let xml = write("Demo", &keep).expect("write");
+        let xml = write("Demo", "test", &keep).expect("write");
         let back = parse(&xml).expect("reparse");
 
         assert_eq!(back.short_name, "Demo");
@@ -587,7 +596,7 @@ mod tests {
             array_size: vec![3, 4],
             axes: vec![],
         };
-        let back = parse(&write("D", &[inst]).expect("write")).expect("reparse");
+        let back = parse(&write("D", "test", &[inst]).expect("write")).expect("reparse");
         assert_eq!(back.instances[0].array_size, vec![3, 4]);
         assert_eq!(back.instances[0].values.len(), 12, "dimensions are not values");
     }
@@ -601,7 +610,7 @@ mod tests {
             array_size: Vec::new(),
             axes: vec![],
         };
-        let xml = write("D", &[inst]).expect("write");
+        let xml = write("D", "test", &[inst]).expect("write");
         let back = parse(&xml).expect("reparse");
         assert_eq!(
             back.instances[0].values,

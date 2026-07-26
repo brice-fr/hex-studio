@@ -3,7 +3,7 @@ members = [".", "crates/a2l-data"]
 
 [package]
 name = "hex-studio"
-version = "0.2.5"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
