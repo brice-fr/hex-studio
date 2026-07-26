@@ -53,6 +53,8 @@
     virtual: 'ƒ',  // computed by a formula
     unsupported: '!',
   };
+  /** A shared axis is graduations, not a curve. */
+  const AXIS_GLYPH = '≡';
 
   // ── Resizable columns ─────────────────────────────────────────────────────
   // Name, Address, Type and Raw carry explicit widths; Physical takes the
@@ -310,18 +312,36 @@
    */
   const isMissing = (r) => r.presence === 'absent' && !isVirtual(r);
 
+  /** A shared AXIS_PTS object rather than a curve of its own. */
+  const isAxis = (r) => r.kind === 'axis_pts';
+
+  /**
+   * What each sidebar entry selects.
+   *
+   * `category` describes the shape of the data and `kind` says which A2L block
+   * it came from, so a shared axis can be told apart from a curve without
+   * either concept having to absorb the other.
+   *
+   * Counts and filtering both run off this one map, so a sidebar number can
+   * never disagree with the list it opens.
+   */
+  const CATEGORY_MATCH = {
+    all:         () => true,
+    scalar:      (r) => r.category === 'scalar',
+    curve:       (r) => r.category === 'curve' && !isAxis(r),
+    axis:        isAxis,
+    ascii:       (r) => r.category === 'ascii',
+    virtual:     (r) => r.category === 'virtual',
+    unsupported: (r) => r.category === 'unsupported',
+    absent:      (r) => isMissing(r),
+  };
+
   const counts = $derived.by(() => {
-    const c = {
-      all: rows.length, scalar: 0, curve: 0, ascii: 0,
-      virtual: 0, unsupported: 0, absent: 0,
-    };
+    const c = Object.fromEntries(Object.keys(CATEGORY_MATCH).map((k) => [k, 0]));
     for (const r of rows) {
-      if (r.category === 'scalar')           c.scalar++;
-      else if (r.category === 'curve')       c.curve++;
-      else if (r.category === 'ascii')       c.ascii++;
-      else if (r.category === 'virtual')     c.virtual++;
-      else if (r.category === 'unsupported') c.unsupported++;
-      if (isMissing(r))                      c.absent++;
+      for (const id in CATEGORY_MATCH) {
+        if (CATEGORY_MATCH[id](r)) c[id]++;
+      }
     }
     return c;
   });
@@ -329,11 +349,8 @@
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
-      if (category === 'absent') {
-        if (!isMissing(r)) return false;
-      } else if (category !== 'all' && r.category !== category) {
-        return false;
-      }
+      const match = CATEGORY_MATCH[category] ?? CATEGORY_MATCH.all;
+      if (!match(r)) return false;
       if (!q) return true;
       return r.name.toLowerCase().includes(q)
           || r.description.toLowerCase().includes(q);
@@ -427,6 +444,7 @@
         { id: 'all',         label: 'All',         n: counts.all },
         { id: 'scalar',      label: 'Scalars',     n: counts.scalar },
         { id: 'curve',       label: '1D curves',   n: counts.curve },
+        { id: 'axis',        label: 'Axes',        n: counts.axis },
         { id: 'ascii',       label: 'Strings',     n: counts.ascii },
         { id: 'virtual',     label: 'Virtual',     n: counts.virtual },
         { id: 'unsupported', label: 'Unsupported', n: counts.unsupported },
@@ -544,9 +562,9 @@
                   title={row.description || row.name}
                 >
                   <span class="c-name"><span
-                      class="glyph {row.category}"
+                      class="glyph {isAxis(row) ? 'axis' : row.category}"
                       aria-hidden="true"
-                    >{CATEGORY_GLYPH[row.category] ?? '·'}</span>{row.name}</span>
+                    >{isAxis(row) ? AXIS_GLYPH : (CATEGORY_GLYPH[row.category] ?? '·')}</span>{row.name}</span>
                   <!-- A computed parameter's declared address is a placeholder,
                        so showing 0x00000000 would only mislead. -->
                   {#if showAddress}<span class="c-addr">{isVirtual(row) ? '—' : hex32(row.address)}</span>{/if}
@@ -917,6 +935,7 @@
   }
 
   .glyph.scalar      { color: var(--c-dim); }
+  .glyph.axis        { color: var(--c-addr); }
   .glyph.virtual     { color: var(--c-diff-ref-only); }
   .glyph.unsupported { color: var(--c-diff-changed); }
 
