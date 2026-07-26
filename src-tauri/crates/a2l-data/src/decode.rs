@@ -324,7 +324,7 @@ fn decode_ascii(bytes: &[u8]) -> AsciiField {
 
 /// The point count actually in use: the stored count when the layout has one,
 /// clamped to the allocation.
-fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
+pub(crate) fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
     let declared = plan.declared_points;
     let (Some(field), Some(bytes)) = (plan.layout.no_axis_pts, bytes) else {
         return declared;
@@ -595,6 +595,10 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
     let bytes = src.read(plan.address, size).unwrap_or_default();
     let n = effective_points(&plan, if bytes.is_empty() { None } else { Some(&bytes) });
     let fmt = plan.format().to_string();
+    // Points can only be written when the whole object is present — a partial
+    // read would put an edit at an address whose neighbours are unknown.
+    let editable_points =
+        presence_of(src, &plan) == Presence::Full && plan.category != Category::Virtual;
 
     let to_points = |raws: Vec<f64>, conv: &crate::convert::Conversion, fmt: &str| -> Vec<PointValue> {
         raws.into_iter()
@@ -627,10 +631,8 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             return Vec::new();
         }
         let count = effective_points(p, Some(&b));
-        let mut raws = read_field(&b, Field { count, ..field }, p.endian);
-        if p.layout.axis_index_decr {
-            raws.reverse();
-        }
+        // Storage order: the caller reverses axis and values together.
+        let raws = read_field(&b, Field { count, ..field }, p.endian);
         to_points(raws, &p.conv.conversion, &p.conv.format)
     };
 
@@ -665,6 +667,8 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             value_unit: "index".to_string(),
             axis_kind: "RES_AXIS".to_string(),
             axis_ref: None,
+            values_editable: editable_points,
+            axis_editable: editable_points,
             bytes,
         });
     }
@@ -685,11 +689,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         AxisSource::Internal => match plan.layout.axis_pts {
             Some(field) if !bytes.is_empty() => {
                 let used = Field { count: n, ..field };
-                let mut raws = read_field(&bytes, used, plan.endian);
-                // INDEX_DECR stores the axis highest-first; present it ascending.
-                if plan.layout.axis_index_decr {
-                    raws.reverse();
-                }
+                let raws = read_field(&bytes, used, plan.endian);
                 let conv = axis_conv
                     .as_ref()
                     .map(|c| c.conversion.clone())
@@ -727,6 +727,20 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         AxisSource::None => Vec::new(),
     };
 
+    // Everything above was read in storage order. An INDEX_DECR axis is stored
+    // highest-first, and the function values sit alongside it element by
+    // element, so presenting the axis ascending means reversing *both* — the
+    // CDFX for this file pairs axis -5 with value -3, which is the last stored
+    // element of each. Reversing only the axis silently mispairs every point.
+    let (axis, values) = if plan.display_reversed {
+        (
+            axis.into_iter().rev().collect(),
+            values.into_iter().rev().collect(),
+        )
+    } else {
+        (axis, values)
+    };
+
     Some(ParamDetail {
         name: plan.name.clone(),
         description: plan.description.clone(),
@@ -738,6 +752,16 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         value_unit: plan.display_unit().to_string(),
         axis_kind: plan.axis_kind.to_string(),
         axis_ref: plan.axis.reference().map(str::to_string),
+        values_editable: editable_points && plan.conv.conversion.is_invertible(),
+        // Only an axis stored in this object's own record can be written here;
+        // a shared or computed one is edited elsewhere, or not at all.
+        axis_editable: editable_points
+            && matches!(plan.axis, AxisSource::Internal)
+            && plan
+                .axis_conv
+                .as_ref()
+                .map(|c| c.conversion.is_invertible())
+                .unwrap_or(false),
         bytes,
     })
 }

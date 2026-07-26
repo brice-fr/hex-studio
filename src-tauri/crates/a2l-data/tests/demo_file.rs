@@ -145,18 +145,23 @@ fn std_axis_curve_decodes_axis_and_values() {
     assert_eq!(detail.axis.len(), 8);
     assert_eq!(detail.values.len(), 8);
 
-    // Stored highest-first, presented ascending.
+    // Expected values come from ASAP2_Demo_V171.CDFX, the calibration-data
+    // counterpart shipped with this A2L, so the pairing is checked against the
+    // file's own record rather than against an assumption.
+    //
+    // The axis is stored INDEX_DECR (highest-first) and the function values sit
+    // alongside it element by element, so presenting the axis ascending
+    // requires reversing both. Reversing only the axis pairs -5 with 9 instead
+    // of -3 and mispairs every point.
     let axis: Vec<f64> = detail.axis.iter().map(|p| p.phys).collect();
+    let values: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
     assert_eq!(axis, vec![-5.0, -1.0, 2.0, 4.0, 5.0, 8.0, 14.0, 22.0]);
+    assert_eq!(values, vec![-3.0, -1.0, 6.0, 71.0, 15.0, 7.0, 13.0, 9.0]);
     assert!(
         axis.windows(2).all(|w| w[1] > w[0]),
         "axis must ascend after INDEX_DECR reversal: {axis:?}"
     );
 
-    // Function values must sit inside the declared limits; reading them one
-    // byte early (no alignment pad) puts them in the thousands.
-    let values: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
-    assert_eq!(values, vec![9.0, 13.0, 7.0, 15.0, 71.0, 6.0, -1.0, -3.0]);
     for v in &values {
         assert!(
             *v >= plan.lower_limit && *v <= plan.upper_limit,
@@ -319,10 +324,116 @@ fn com_axis_curve_reports_its_shared_axis() {
 
     assert_eq!(detail.axis_kind, "COM_AXIS");
     assert_eq!(detail.axis_ref.as_deref(), Some("ASAM.C.AXIS_PTS.UBYTE_8"));
+
+    // Per the CDFX. The shared axis is INDEX_DECR, so the curve's own values
+    // must be reversed to match it even though the curve's record layout says
+    // nothing about ordering — the order belongs to the referenced axis.
+    let axis: Vec<f64> = detail.axis.iter().map(|p| p.phys).collect();
+    let values: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
+    assert_eq!(axis, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 13.0, 15.0]);
+    assert_eq!(values, vec![13.0, 15.0, 16.0, 18.0, 43.0, 16.0, 33.0, 14.0]);
+}
+
+/// Editing a point must land on the element the table showed, which for an
+/// INDEX_DECR axis is the mirror of the storage position. Getting this wrong
+/// writes to the opposite end of the curve and looks plausible.
+#[test]
+fn editing_a_point_maps_display_index_back_to_storage() {
+    use a2l_data::encode::{encode_point, PointTarget};
+    let Some((db, img)) = open_demo() else { return };
+    let name = "ASAM.C.CURVE.STD_AXIS";
+    let plan = db.plan_characteristic(name).expect("curve");
+    assert!(plan.display_reversed, "this curve is stored INDEX_DECR");
+
+    // Displayed values are -3, -1, 6, 71, 15, 7, 13, 9 against axis -5 … 22.
+    // Display index 0 pairs with axis -5, whose value is the *last* stored
+    // element, at offset 10 + 7*2 = 24.
+    let w = encode_point(&db, &img, name, PointTarget::Value, 0, -30.0).expect("encode");
+    assert_eq!(w.address, plan.address + 24, "first shown point is stored last");
+
+    // The other end: display index 7 pairs with axis 22, the first stored.
+    let w = encode_point(&db, &img, name, PointTarget::Value, 7, 90.0).expect("encode");
+    assert_eq!(w.address, plan.address + 10, "last shown point is stored first");
+
+    // The axis column reverses the same way. Axis field starts at offset 1 and
+    // holds SBYTEs, so display index 0 is at 1 + 7 = 8.
+    let w = encode_point(&db, &img, name, PointTarget::Axis, 0, -6.0).expect("encode");
+    assert_eq!(w.address, plan.address + 8);
+    assert_eq!(w.bytes, vec![0xFA], "-6 as an SBYTE");
+
+    // Past the end is refused rather than writing into the next object.
+    assert!(encode_point(&db, &img, name, PointTarget::Value, 8, 1.0).is_err());
+}
+
+/// Writing a point and reading the object back must show the new value at the
+/// same row the edit was made on.
+#[test]
+fn edited_point_reads_back_at_the_same_row() {
+    use a2l_data::encode::{encode_point, PointTarget};
+    let Some((db, img)) = open_demo() else { return };
+    let name = "ASAM.C.CURVE.STD_AXIS";
+
+    for row in [0usize, 3, 7] {
+        let target_value = 40.0 + row as f64;
+        let w = encode_point(&db, &img, name, PointTarget::Value, row as u32, target_value)
+            .expect("encode");
+
+        // Apply the write over a copy of the image and re-decode.
+        let mut edited = MapImage(img.0.clone());
+        for (i, b) in w.bytes.iter().enumerate() {
+            edited.0.insert(w.address + i as u32, *b);
+        }
+        let detail = decode::detail_for(&db, &edited, name).expect("detail");
+        assert_eq!(
+            detail.values[row].phys, target_value,
+            "row {row} should read back what was written to it"
+        );
+
+        // And nothing else moved.
+        let before = decode::detail_for(&db, &img, name).expect("detail");
+        for (i, (a, b)) in before.values.iter().zip(&detail.values).enumerate() {
+            if i != row {
+                assert_eq!(a.phys, b.phys, "row {i} changed while editing row {row}");
+            }
+        }
+    }
+}
+
+/// A shared axis must be edited on the object that owns it, so one write
+/// cannot silently retune every curve referencing it.
+#[test]
+fn a_shared_axis_refuses_edits_and_says_where_to_go() {
+    use a2l_data::encode::{encode_point, PointTarget};
+    let Some((db, img)) = open_demo() else { return };
+
+    let err = encode_point(&db, &img, "ASAM.C.CURVE.COM_AXIS", PointTarget::Axis, 0, 1.0)
+        .expect_err("a shared axis is not editable through the curve");
     assert!(
-        !detail.axis.is_empty(),
-        "breakpoints should be read from the referenced AXIS_PTS object"
+        err.contains("ASAM.C.AXIS_PTS.UBYTE_8"),
+        "the message should name where to edit it: {err}"
     );
+
+    // Its own values remain editable.
+    assert!(encode_point(&db, &img, "ASAM.C.CURVE.COM_AXIS", PointTarget::Value, 0, 20.0).is_ok());
+    // And the axis object itself accepts edits.
+    assert!(
+        encode_point(&db, &img, "ASAM.C.AXIS_PTS.UBYTE_8", PointTarget::Value, 0, 3.0).is_ok()
+    );
+
+    // A computed axis has no bytes to write.
+    let err = encode_point(&db, &img, "ASAM.C.CURVE.FIX_AXIS.PAR", PointTarget::Axis, 0, 1.0)
+        .expect_err("FIX_AXIS is computed");
+    assert!(err.contains("FIX_AXIS"), "{err}");
+}
+
+/// A standalone AXIS_PTS object is itself INDEX_DECR here, so its points must
+/// also read ascending. Per the CDFX.
+#[test]
+fn shared_axis_object_reads_ascending() {
+    let Some((db, img)) = open_demo() else { return };
+    let detail = decode::detail_for(&db, &img, "ASAM.C.AXIS_PTS.UBYTE_8").expect("detail");
+    let pts: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
+    assert_eq!(pts, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 13.0, 15.0]);
 }
 
 /// CURVE_AXIS is the trap: it uses CURVE_AXIS_REF, a different field from the

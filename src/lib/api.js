@@ -189,3 +189,20 @@ export async function a2lEncodeValue(name, phys, records) {
 export async function a2lEncodeText(name, text, records) {
   return invoke('a2l_encode_text', { name, text, records });
 }
+
+/**
+ * Encode one point of a 1D object (curve, axis or value block).
+ *
+ * `index` is the row as displayed. An INDEX_DECR axis is shown in the reverse
+ * of its storage order, and the backend maps the index back, so callers must
+ * pass what the user sees rather than trying to correct for it.
+ * @param {string} name
+ * @param {'value'|'axis'} target  Which column of the point table.
+ * @param {number} index
+ * @param {number} phys
+ * @param {HexRecord[]} records
+ * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
+ */
+export async function a2lEncodePoint(name, target, index, phys, records) {
+  return invoke('a2l_encode_point', { name, target, index, phys, records });
+}

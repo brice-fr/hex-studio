@@ -163,6 +163,10 @@ pub struct ParamDetail {
     /// The object this axis defers to, for COM_AXIS/RES_AXIS (an AXIS_PTS) and
     /// CURVE_AXIS (a characteristic). `None` when the axis is self-contained.
     pub axis_ref: Option<String>,
+    /// Whether each column of the point table accepts edits. An axis stored in
+    /// another object is edited there, and a computed one not at all.
+    pub values_editable: bool,
+    pub axis_editable: bool,
     /// Raw bytes of the whole object, for the byte preview.
     pub bytes: Vec<u8>,
 }

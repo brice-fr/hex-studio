@@ -100,6 +100,143 @@ pub fn encode_scalar(
     })
 }
 
+/// Which column of a 1D object's point table is being edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointTarget {
+    /// A function value, or the points of a standalone AXIS_PTS object.
+    Value,
+    /// An axis breakpoint stored inside this object's own record.
+    Axis,
+}
+
+/// Write one point of a 1D object.
+///
+/// `index` is the index *as displayed*. An INDEX_DECR axis is stored
+/// highest-first while the table shows it ascending, so the index is mapped
+/// back to storage here — doing that in the frontend would put every edit on
+/// the mirror-image point.
+pub fn encode_point(
+    db: &A2lDatabase,
+    src: &dyn ByteSource,
+    name: &str,
+    target: PointTarget,
+    index: u32,
+    phys: f64,
+) -> Result<EncodedWrite, String> {
+    let plan = db
+        .plan_any(name)
+        .ok_or_else(|| format!("'{name}' not found in the A2L description"))?;
+
+    if plan.category == Category::Virtual {
+        return Err(format!("'{name}' is computed, not stored"));
+    }
+
+    let bytes = src
+        .read(plan.address, plan.byte_size())
+        .ok_or_else(|| format!("'{name}' is not fully present in the image"))?;
+    let points = crate::decode::effective_points(&plan, Some(&bytes));
+
+    // A rescale axis interleaves (axis value, index) pairs in one array, so the
+    // two columns are the even and odd elements of the same field.
+    if let Some(field) = plan.layout.rescale {
+        if index >= points {
+            return Err(format!("point {index} is past the end ({points} pairs)"));
+        }
+        let slot = index * 2 + u32::from(target == PointTarget::Value);
+        // The paired index is a position in the virtual axis, not a physical
+        // quantity, so only the axis half goes through the conversion.
+        let raw = match target {
+            PointTarget::Axis => plan
+                .conv
+                .conversion
+                .to_raw(phys)
+                .ok_or_else(|| format!("conversion '{}' cannot be inverted", plan.conv.name))?,
+            PointTarget::Value => phys,
+        };
+        return element_write(&plan, field, slot, raw, &plan.conv.conversion);
+    }
+
+    let (field, conv) = match target {
+        PointTarget::Value => (
+            plan.layout
+                .fnc
+                .or(plan.layout.axis_pts)
+                .ok_or_else(|| format!("'{name}' stores no values"))?,
+            &plan.conv.conversion,
+        ),
+        PointTarget::Axis => match &plan.axis {
+            crate::db::AxisSource::Internal => (
+                plan.layout
+                    .axis_pts
+                    .ok_or_else(|| format!("'{name}' stores no axis points"))?,
+                plan.axis_conv
+                    .as_ref()
+                    .map(|c| &c.conversion)
+                    .unwrap_or(&plan.conv.conversion),
+            ),
+            // A shared axis belongs to another object; edit it there so one
+            // write cannot silently change every curve that references it.
+            crate::db::AxisSource::AxisPts(r) | crate::db::AxisSource::CurveRef(r) => {
+                return Err(format!("this axis belongs to '{r}' — edit it there"));
+            }
+            crate::db::AxisSource::Fixed(_) => {
+                return Err("a FIX_AXIS is computed and occupies no bytes".to_string());
+            }
+            crate::db::AxisSource::None => {
+                return Err(format!("'{name}' has no axis"));
+            }
+        },
+    };
+
+    if index >= points {
+        return Err(format!("point {index} is past the end ({points} points)"));
+    }
+    // Undo the presentation reversal to reach the stored element.
+    let slot = if plan.display_reversed {
+        points - 1 - index
+    } else {
+        index
+    };
+
+    let raw = conv
+        .to_raw(phys)
+        .ok_or_else(|| format!("conversion '{}' cannot be inverted", plan.conv.name))?;
+    element_write(&plan, field, slot, raw, conv)
+}
+
+/// Encode a single array element at `slot`.
+fn element_write(
+    plan: &ObjectPlan,
+    field: Field,
+    slot: u32,
+    raw: f64,
+    conv: &crate::convert::Conversion,
+) -> Result<EncodedWrite, String> {
+    if slot >= field.count {
+        return Err(format!("element {slot} is outside the stored array"));
+    }
+    let size = layout::datatype_size(field.datatype);
+    let address = plan.address + field.offset + slot * size;
+    let bytes = write_element(raw, field.datatype, plan.endian);
+
+    // Report what will actually be read back, since the raw domain is coarser
+    // than the physical one.
+    let stored_raw = crate::decode::read_element(&bytes, field.datatype, plan.endian)
+        .ok_or_else(|| "failed to re-read the encoded value".to_string())?;
+    let stored_phys = match conv.to_phys(stored_raw) {
+        Phys::Num(v) => v,
+        _ => stored_raw,
+    };
+
+    Ok(EncodedWrite {
+        address,
+        bytes,
+        raw: stored_raw,
+        phys: stored_phys,
+    })
+}
+
 /// Encode a textual value: an enum label for a verbal scalar, or the contents
 /// of an ASCII character array.
 pub fn encode_text(

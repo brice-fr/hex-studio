@@ -9,7 +9,8 @@
   import { Menu, Submenu, MenuItem, CheckMenuItem, PredefinedMenuItem } from '@tauri-apps/api/menu';
   import { open, save, message } from '@tauri-apps/plugin-dialog';
   import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile,
-           a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText } from '$lib/api.js';
+           a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText,
+           a2lEncodePoint } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
@@ -483,6 +484,19 @@
       await applyA2lWrite(name, await a2lEncodeText(name, text, records));
     } catch (err) {
       status = `Cannot write ${name}: ${err}`;
+    }
+  }
+
+  /** Edit one point of a 1D object. `index` is the row as displayed. */
+  async function handleA2lEditPoint(name, target, index, phys) {
+    try {
+      const encoded = await a2lEncodePoint(name, target, index, phys, records);
+      pushUndo(`Edit ${name}[${index}]`);
+      records = writeBytes(records, encoded.address, encoded.bytes);
+      const label = target === 'axis' ? 'axis' : 'value';
+      status = `${name} ${label}[${index}] → ${encoded.phys}`;
+    } catch (err) {
+      status = `Cannot write ${name}[${index}]: ${err}`;
     }
   }
 
@@ -1155,6 +1169,7 @@
           onEditValue={handleA2lEditValue}
           onEditText={handleA2lEditText}
           onGoto={handleA2lGoto}
+          onEditPoint={handleA2lEditPoint}
         />
       {:else}
         <HexViewer

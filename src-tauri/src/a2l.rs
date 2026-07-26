@@ -227,6 +227,25 @@ pub fn a2l_encode_value(
     with_db(&state, |db| encode::encode_scalar(db, &image, &name, phys))
 }
 
+/// Encode one point of a 1D object.
+///
+/// `index` is the row as displayed; the backend maps it back to storage, since
+/// an INDEX_DECR axis is shown in the reverse of the order it is stored in.
+#[tauri::command]
+pub fn a2l_encode_point(
+    name: String,
+    target: encode::PointTarget,
+    index: u32,
+    phys: f64,
+    records: Vec<RecordData>,
+    state: tauri::State<A2lState>,
+) -> Result<EncodedWrite, String> {
+    let image = RecordImage::from_records(&records);
+    with_db(&state, |db| {
+        encode::encode_point(db, &image, &name, target, index, phys)
+    })
+}
+
 /// Encode a textual value — an enum label or an ASCII string — into bytes.
 #[tauri::command]
 pub fn a2l_encode_text(

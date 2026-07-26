@@ -16,6 +16,7 @@
    *   onEditText   – (text: string) => void
    *   onGoto       – (addr: number) => void   jump to the address in the hex view
    *   onNavigate   – (name: string) => void   select another parameter
+   *   onEditPoint  – (target: 'value'|'axis', index: number, phys: number) => void
    */
   let {
     row         = null,
@@ -25,7 +26,41 @@
     onEditText  = (_text) => {},
     onGoto      = (_addr) => {},
     onNavigate  = (_name) => {},
+    onEditPoint = (_target, _index, _phys) => {},
   } = $props();
+
+  /** Which point cell is being edited, as `"target:index"`. */
+  let editingCell = $state(/** @type {string|null} */ (null));
+  let cellDraft   = $state('');
+  let cellError   = $state('');
+
+  function beginCell(target, index, current) {
+    if (target === 'axis' ? !detail?.axis_editable : !detail?.values_editable) return;
+    editingCell = `${target}:${index}`;
+    cellDraft = String(current);
+    cellError = '';
+  }
+
+  function cancelCell() {
+    editingCell = null;
+    cellError = '';
+  }
+
+  function commitCell(target, index) {
+    const v = Number(cellDraft.trim());
+    if (cellDraft.trim() === '' || Number.isNaN(v)) {
+      cellError = 'number';
+      return;
+    }
+    editingCell = null;
+    cellError = '';
+    onEditPoint(target, index, v);
+  }
+
+  function cellKey(e, target, index) {
+    if (e.key === 'Enter')  { commitCell(target, index); e.preventDefault(); }
+    if (e.key === 'Escape') { cancelCell(); e.preventDefault(); }
+  }
 
   /** How each AXIS_DESCR attribute stores its breakpoints, in plain words. */
   const AXIS_KIND_LABEL = {
@@ -355,8 +390,36 @@
               {#each points as p}
                 <tr>
                   <td class="i">{p.i}</td>
-                  <td class="ax">{p.axis ? atPrecision(p.axis.phys, p.axis.display) : '—'}</td>
-                  <td class="r">{p.value ? atPrecision(p.value.phys, p.value.display) : '—'}</td>
+                  {#each [
+                    { target: 'axis',  pt: p.axis,  cls: 'ax', can: detail?.axis_editable },
+                    { target: 'value', pt: p.value, cls: 'r',  can: detail?.values_editable },
+                  ] as col}
+                    <td class={col.cls}>
+                      {#if !col.pt}
+                        —
+                      {:else if editingCell === `${col.target}:${p.i}`}
+                        <!-- svelte-ignore a11y_autofocus -->
+                        <input
+                          class="cell-input"
+                          class:invalid={!!cellError}
+                          bind:value={cellDraft}
+                          onkeydown={(e) => cellKey(e, col.target, p.i)}
+                          onblur={() => commitCell(col.target, p.i)}
+                          aria-label="{col.target} at point {p.i}"
+                          spellcheck="false"
+                          autofocus
+                        />
+                      {:else if col.can}
+                        <button
+                          class="cell"
+                          onclick={() => beginCell(col.target, p.i, col.pt.phys)}
+                          title="Edit"
+                        >{atPrecision(col.pt.phys, col.pt.display)}</button>
+                      {:else}
+                        {atPrecision(col.pt.phys, col.pt.display)}
+                      {/if}
+                    </td>
+                  {/each}
                 </tr>
               {/each}
             </tbody>
@@ -677,6 +740,43 @@
     border-bottom: 1px solid var(--c-ec1);
     white-space: nowrap;
   }
+
+  /* An editable cell reads as plain text until hovered, so the table stays
+     scannable rather than looking like a form. */
+  .cell {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    color: inherit;
+    font: inherit;
+    cursor: text;
+    width: 100%;
+    text-align: inherit;
+    border-radius: 2px;
+  }
+
+  .cell:hover      { background: var(--c-hover); }
+  .cell:focus-visible {
+    outline: 1px solid var(--c-accent);
+    outline-offset: 0;
+  }
+
+  .cell-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    background: var(--c-bg);
+    border: 1px solid var(--c-accent);
+    border-radius: 2px;
+    color: var(--c-text);
+    font: inherit;
+    padding: 0 2px;
+    text-align: inherit;
+  }
+
+  .cell-input:focus { outline: none; }
+  .cell-input.invalid { border-color: var(--c-err); }
 
   .points .i  { color: var(--c-dim); width: 22px; }
   .points .ax { color: var(--c-addr); }

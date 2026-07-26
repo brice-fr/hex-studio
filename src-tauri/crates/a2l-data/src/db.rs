@@ -104,6 +104,14 @@ pub struct ObjectPlan {
     /// For a VIRTUAL_CHARACTERISTIC: the formula and the parameters it reads.
     pub virtual_formula: Option<String>,
     pub virtual_inputs: Vec<String>,
+    /// True when the governing axis is stored INDEX_DECR, so presentation order
+    /// is the reverse of storage order.
+    ///
+    /// Function values correspond to axis points element by element in *storage*
+    /// order, so an axis shown ascending requires its values reversed to match.
+    /// For a COM_AXIS the order is a property of the referenced AXIS_PTS object
+    /// rather than of the curve's own record layout.
+    pub display_reversed: bool,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -400,6 +408,11 @@ impl A2lDatabase {
         }
 
         let (axis, axis_conv, axis_kind) = self.axis_source(ch, category);
+        let display_reversed = match &axis {
+            AxisSource::Internal => layout.axis_index_decr,
+            AxisSource::AxisPts(n) => self.axis_pts_is_decreasing(n),
+            _ => false,
+        };
 
         Some(ObjectPlan {
             name: name.to_string(),
@@ -419,6 +432,7 @@ impl A2lDatabase {
                 .as_ref()
                 .map(|v| v.characteristic_list.clone())
                 .unwrap_or_default(),
+            display_reversed,
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -464,6 +478,7 @@ impl A2lDatabase {
                 ResolvedLayout::default(),
             ),
         };
+        let display_reversed = layout.axis_index_decr;
 
         Some(ObjectPlan {
             name: name.to_string(),
@@ -480,6 +495,7 @@ impl A2lDatabase {
             bit_mask: 0,
             virtual_formula: None,
             virtual_inputs: Vec::new(),
+            display_reversed,
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -541,6 +557,7 @@ impl A2lDatabase {
             bit_mask: m.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
             virtual_formula: None,
             virtual_inputs: Vec::new(),
+            display_reversed: false,
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,
@@ -631,6 +648,23 @@ impl A2lDatabase {
 /// `system_constant_name_survives_debug_format` fails loudly if a future
 /// a2lfile changes that formatting — without it, every `sysc()` reference would
 /// quietly stop resolving.
+impl A2lDatabase {
+    /// Whether a referenced AXIS_PTS object stores its points highest-first.
+    fn axis_pts_is_decreasing(&self, name: &str) -> bool {
+        self.module()
+            .axis_pts
+            .get(name)
+            .and_then(|ap| self.module().record_layout.get(&ap.deposit_record))
+            .map(|rl| {
+                rl.axis_pts_x
+                    .as_ref()
+                    .map(|f| f.index_incr == a2lfile::IndexOrder::IndexDecr)
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+}
+
 fn system_constant_name(sc: &a2lfile::SystemConstant) -> Option<String> {
     let rendered = format!("{sc:?}");
     let after = rendered.split("name: \"").nth(1)?;

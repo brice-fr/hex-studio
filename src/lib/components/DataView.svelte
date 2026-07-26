@@ -40,6 +40,7 @@
     onEditValue = (_name, _phys) => {},
     onEditText  = (_name, _text) => {},
     onGoto      = (_addr) => {},
+    onEditPoint = (_name, _target, _index, _phys) => {},
   } = $props();
 
   const ROW_H = 22;
@@ -609,6 +610,8 @@
         onEditText={(text) => selectedRow && onEditText(selectedRow.name, text)}
         {onGoto}
         onNavigate={navigateTo}
+        onEditPoint={(target, index, phys) =>
+          selectedRow && onEditPoint(selectedRow.name, target, index, phys)}
       />
     </aside>
   </div>
