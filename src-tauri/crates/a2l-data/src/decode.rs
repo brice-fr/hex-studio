@@ -589,6 +589,14 @@ pub fn list_rows(
 }
 
 /// Full axis and value arrays for one 1D object.
+/// Reorder a storage-order array into presentation order.
+fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan) -> Vec<T> {
+    let n = stored.len() as u32;
+    (0..n)
+        .map(|i| stored[plan.storage_slot(i, n) as usize].clone())
+        .collect()
+}
+
 pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<ParamDetail> {
     let plan = db.plan_any(name)?;
     let size = plan.byte_size();
@@ -732,14 +740,10 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
     // element, so presenting the axis ascending means reversing *both* — the
     // CDFX for this file pairs axis -5 with value -3, which is the last stored
     // element of each. Reversing only the axis silently mispairs every point.
-    let (axis, values) = if plan.display_reversed {
-        (
-            axis.into_iter().rev().collect(),
-            values.into_iter().rev().collect(),
-        )
-    } else {
-        (axis, values)
-    };
+    // A COLUMN_DIR matrix is likewise stored transposed. `storage_slot` knows
+    // about both, so gathering through it is all either case needs.
+    let axis = gather(axis, &plan);
+    let values = gather(values, &plan);
 
     Some(ParamDetail {
         name: plan.name.clone(),

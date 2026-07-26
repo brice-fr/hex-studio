@@ -7,6 +7,7 @@ name = "a2l-data"
 version = "0.1.0"
 dependencies = [
  "a2lfile",
+ "quick-xml 0.41.0",
  "serde",
 ]
 
@@ -3047,6 +3048,15 @@ name = "quick-xml"
 version = "0.39.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "958f21e8e7ceb5a1aa7fa87fab28e7c75976e0bfe7e23ff069e0a260f894067d"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
 dependencies = [
  "memchr",
 ]

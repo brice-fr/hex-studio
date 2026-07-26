@@ -945,3 +945,277 @@ fn scalar_edits_round_trip_through_the_image() {
     assert!(checked > 10, "expected many editable scalars, saw {checked}");
 }
 
+
+/// The parser must handle the real file, not just a hand-written sample.
+#[test]
+fn parses_the_shipped_cdfx() {
+    let Some(dir) = demo_dir() else { return };
+    let path = format!("{dir}/ASAP2_Demo_V171.CDFX");
+    if !std::path::Path::new(&path).exists() {
+        eprintln!("skipping: no CDFX alongside the demo A2L");
+        return;
+    }
+    let xml = std::fs::read_to_string(&path).expect("read CDFX");
+    let f = a2l_data::cdfx::parse(&xml).expect("parse the shipped CDFX");
+
+    assert_eq!(f.instances.len(), 86, "every SW-INSTANCE is read");
+
+    // Spot-checks against values verified by hand earlier in this work.
+    let s = f.get("ASAM.C.SCALAR.UBYTE.IDENTICAL").expect("scalar");
+    assert_eq!(s.category, "VALUE");
+    assert_eq!(s.values, vec![a2l_data::cdfx::CdfxValue::Num(20.0)]);
+
+    // A verbal value arrives as text, not a number.
+    let e = f.get("ASAM.C.SCALAR.SWORD.TAB_VERB_DEFAULT_VALUE").expect("enum");
+    assert_eq!(e.values, vec![a2l_data::cdfx::CdfxValue::Text("Square".into())]);
+
+    // The string is stored as character entities and must come back readable.
+    let a = f.get("ASAM.C.ASCII.UBYTE.NUMBER_42").expect("ascii");
+    assert_eq!(a.values, vec![a2l_data::cdfx::CdfxValue::Text("ASAM Test".into())]);
+
+    // Curve values and axis breakpoints stay in their own lists.
+    let c = f.get("ASAM.C.CURVE.STD_AXIS").expect("curve");
+    let vals: Vec<f64> = c.values.iter().filter_map(|v| v.as_num()).collect();
+    let axis: Vec<f64> = c.axes[0].values.iter().filter_map(|v| v.as_num()).collect();
+    assert_eq!(vals, vec![-3.0, -1.0, 6.0, 71.0, 15.0, 7.0, 13.0, 9.0]);
+    assert_eq!(axis, vec![-5.0, -1.0, 2.0, 4.0, 5.0, 8.0, 14.0, 22.0]);
+
+    // A shared axis is a reference rather than duplicated values.
+    let com = f.get("ASAM.C.CURVE.COM_AXIS").expect("com axis curve");
+    assert_eq!(
+        com.axes[0].instance_ref.as_deref(),
+        Some("ASAM.C.AXIS_PTS.UBYTE_8")
+    );
+}
+
+fn load_demo_cdfx(dir: &str) -> Option<a2l_data::cdfx::CdfxFile> {
+    let path = format!("{dir}/ASAP2_Demo_V171.CDFX");
+    if !std::path::Path::new(&path).exists() {
+        eprintln!("skipping: no CDFX alongside the demo A2L");
+        return None;
+    }
+    Some(a2l_data::cdfx::parse(&std::fs::read_to_string(&path).ok()?).expect("parse CDFX"))
+}
+
+/// The shipped CDFX describes the shipped hex, so importing one into the other
+/// must be a no-op. Any reported change is a disagreement between this crate's
+/// conversions and the tool that produced the file — which is exactly what this
+/// test exists to catch.
+#[test]
+fn importing_the_shipped_cdfx_changes_nothing() {
+    let Some(dir) = demo_dir() else { return };
+    let Some((db, img)) = open_demo() else { return };
+    let Some(file) = load_demo_cdfx(&dir) else { return };
+
+    let report = a2l_data::sync::plan_import(&db, &img, &file);
+
+    eprintln!(
+        "instances {} | matched {} | unchanged {} | changed {} | skipped {} | not in A2L {}",
+        report.file_instances,
+        report.matched,
+        report.unchanged,
+        report.changed_parameters(),
+        report.skipped.len(),
+        report.not_in_a2l.len()
+    );
+    for c in report.changes.iter().take(10) {
+        eprintln!("  CHANGE {} {}[{:?}] {} -> {}", c.name, c.target, c.index, c.current, c.incoming);
+    }
+
+    assert_eq!(report.file_instances, 86);
+    assert!(report.matched > 60, "most instances should resolve");
+
+    // The shipped file rounds every value to its A2L FORMAT, which for the two
+    // IEEE scalars loses real precision — it records -3 for a stored
+    // -3.000000491882041. Those two are expected to differ; nothing else is.
+    let names: Vec<&str> = report.changes.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "ASAM.C.SCALAR.FLOAT32_IEEE.IDENTICAL",
+            "ASAM.C.SCALAR.FLOAT64_IEEE.IDENTICAL",
+        ],
+        "only the file's float rounding should show up as a change"
+    );
+    assert_eq!(report.unchanged, report.matched - 2);
+
+    // And the report must make that rounding visible rather than printing
+    // "-3 -> -3", which is what the A2L FORMAT alone would produce.
+    let f64_change = &report.changes[1];
+    assert_eq!(f64_change.current, "-3.000000491882041");
+    assert_eq!(f64_change.incoming, "-3");
+}
+
+/// A changed CDFX must produce exactly the writes needed, and no others.
+#[test]
+fn import_reports_only_what_actually_differs() {
+    let Some(dir) = demo_dir() else { return };
+    let Some((db, img)) = open_demo() else { return };
+    let Some(mut file) = load_demo_cdfx(&dir) else { return };
+
+    // Nudge one scalar and one curve point.
+    for inst in &mut file.instances {
+        if inst.name == "ASAM.C.SCALAR.UBYTE.IDENTICAL" {
+            inst.values = vec![a2l_data::cdfx::CdfxValue::Num(30.0)];
+        }
+        if inst.name == "ASAM.C.CURVE.STD_AXIS" {
+            inst.values[0] = a2l_data::cdfx::CdfxValue::Num(-9.0);
+        }
+    }
+
+    let report = a2l_data::sync::plan_import(&db, &img, &file);
+    // The two edits, plus the two float scalars the file rounds (see
+    // `importing_the_shipped_cdfx_changes_nothing`).
+    assert_eq!(report.changes.len(), 4);
+
+    let scalar = report
+        .changes
+        .iter()
+        .find(|c| c.name == "ASAM.C.SCALAR.UBYTE.IDENTICAL")
+        .expect("scalar change");
+    assert_eq!(scalar.current, "20");
+    assert_eq!(scalar.incoming, "30");
+    assert_eq!(scalar.address, 0x810000);
+    assert_eq!(scalar.bytes, vec![30]);
+
+    // The curve's first displayed point is the last stored element, so the
+    // change must carry that address rather than the start of the array.
+    let point = report
+        .changes
+        .iter()
+        .find(|c| c.name == "ASAM.C.CURVE.STD_AXIS")
+        .expect("curve change");
+    assert_eq!(point.index, Some(0));
+    assert_eq!(point.address, 0x810300 + 24);
+}
+
+/// Export then re-import must be a no-op, and the written file must reparse.
+#[test]
+fn exported_cdfx_round_trips_against_the_image() {
+    let Some((db, img)) = open_demo() else { return };
+
+    let instances = a2l_data::sync::export(&db, &img);
+    assert!(instances.len() > 50, "got {}", instances.len());
+
+    let xml = a2l_data::cdfx::write("hex-studio-export", &instances).expect("write");
+    let reparsed = a2l_data::cdfx::parse(&xml).expect("reparse our own output");
+    assert_eq!(reparsed.instances.len(), instances.len());
+
+    // Feeding our export back in must find nothing to do.
+    let report = a2l_data::sync::plan_import(&db, &img, &reparsed);
+    for c in report.changes.iter().take(10) {
+        eprintln!("  UNEXPECTED {} {} {} -> {}", c.name, c.target, c.current, c.incoming);
+    }
+    assert!(
+        report.changes.is_empty(),
+        "{} value(s) changed when re-importing our own export",
+        report.changes.len()
+    );
+}
+
+/// How many decimals a parsed value was written with — the fewest that
+/// reproduce it exactly.
+fn decimals_shown(v: f64) -> usize {
+    (0..=12)
+        .find(|d| {
+            let f = 10f64.powi(*d as i32);
+            (v * f).round() / f == v
+        })
+        .unwrap_or(12)
+}
+
+/// Values we export must agree with the ones the reference tool wrote.
+#[test]
+fn export_matches_the_shipped_cdfx_values() {
+    let Some(dir) = demo_dir() else { return };
+    let Some((db, img)) = open_demo() else { return };
+    let Some(shipped) = load_demo_cdfx(&dir) else { return };
+
+    let ours = a2l_data::sync::export(&db, &img);
+    let mut compared = 0;
+    for inst in &ours {
+        let Some(theirs) = shipped.get(&inst.name) else { continue };
+        if inst.values.len() != theirs.values.len() {
+            continue; // shapes we model differently, e.g. rescale pairs
+        }
+        for (a, b) in inst.values.iter().zip(&theirs.values) {
+            match (a, b) {
+                (a2l_data::cdfx::CdfxValue::Num(x), a2l_data::cdfx::CdfxValue::Num(y)) => {
+                    // The shipped file rounds — to the A2L FORMAT where there
+                    // is one, and to whole numbers where there is not, so its
+                    // FLOAT32 scalar reads "33" for a stored 33.23455810546875.
+                    // Comparing to half a unit in its own last decimal place is
+                    // therefore as tight as the file allows. Byte-exactness is
+                    // what `importing_the_shipped_cdfx_changes_nothing` covers.
+                    let tol = 0.5 * 10f64.powi(-(decimals_shown(*y) as i32));
+                    assert!(
+                        (x - y).abs() <= tol,
+                        "{}: we say {x}, the shipped file says {y}",
+                        inst.name
+                    );
+                }
+                (a2l_data::cdfx::CdfxValue::Text(x), a2l_data::cdfx::CdfxValue::Text(y)) => {
+                    assert_eq!(x, y, "{}", inst.name);
+                }
+                _ => {}
+            }
+            compared += 1;
+        }
+    }
+    assert!(compared > 100, "expected many comparisons, made {compared}");
+}
+
+/// The demo file stores one 3x4 matrix twice — once ROW_DIR, once COLUMN_DIR —
+/// specifically so a reader can be checked against itself. Both must present
+/// the same matrix, and the CDFX's row-by-row grouping says which one that is.
+#[test]
+fn row_dir_and_column_dir_matrices_agree() {
+    let Some((db, img)) = open_demo() else { return };
+
+    let read = |name: &str| -> Vec<f64> {
+        decode::detail_for(&db, &img, name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .values
+            .iter()
+            .map(|p| p.phys)
+            .collect()
+    };
+
+    let row = read("ASAM.C.ARRAY.SWORD.MATRIX_DIM_3_4.ROW_DIR");
+    let col = read("ASAM.C.ARRAY.SWORD.MATRIX_DIM_3_4.COLUMN_DIR");
+
+    assert_eq!(row.len(), 12, "3x4 is twelve elements, not three");
+    assert_eq!(row, (1..=12).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(col, row, "COLUMN_DIR is stored transposed, not different data");
+}
+
+/// Writing a COLUMN_DIR element must land on the byte the same index reads.
+#[test]
+fn column_dir_writes_where_it_reads() {
+    let Some((db, img)) = open_demo() else { return };
+    let name = "ASAM.C.ARRAY.SWORD.MATRIX_DIM_3_4.COLUMN_DIR";
+    let plan = db.plan_characteristic(name).expect("present");
+
+    for index in 0..12u32 {
+        let w = a2l_data::encode::encode_point(
+            &db,
+            &img,
+            name,
+            a2l_data::encode::PointTarget::Value,
+            index,
+            99.0,
+        )
+        .expect("encodable");
+        // Element `index` is displayed as value `index + 1`, so the byte it
+        // writes must be the one currently holding that value.
+        let stored = img.read(w.address, 2).expect("in image");
+        let current = i16::from_le_bytes([stored[0], stored[1]]);
+        assert_eq!(
+            current,
+            index as i16 + 1,
+            "index {index} at {:#x} holds {current}",
+            w.address
+        );
+        assert!(w.address >= plan.address && w.address < plan.address + plan.byte_size());
+    }
+}

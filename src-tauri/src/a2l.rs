@@ -15,8 +15,8 @@ use std::sync::Mutex;
 
 use a2l_data::model::ByteSource;
 use a2l_data::{
-    decode, encode, stats, A2lDatabase, A2lSummary, CoverageStats, EncodedWrite, ParamDetail,
-    ParamRow,
+    cdfx, decode, encode, stats, sync, A2lDatabase, A2lSummary, CoverageStats, EncodedWrite,
+    ParamDetail, ParamRow,
 };
 
 use crate::file_operations::RecordData;
@@ -256,6 +256,53 @@ pub fn a2l_encode_text(
 ) -> Result<EncodedWrite, String> {
     let image = RecordImage::from_records(&records);
     with_db(&state, |db| encode::encode_text(db, &image, &name, &text))
+}
+
+/// Read a CDFX file and report what importing it would change.
+///
+/// Nothing is written. The returned changes carry their own bytes, so the
+/// frontend can show the user what would happen and then apply the whole set
+/// through one edit — which is also what makes it a single undo entry.
+#[tauri::command]
+pub fn cdfx_preview(
+    path: String,
+    records: Vec<RecordData>,
+    state: tauri::State<A2lState>,
+) -> Result<sync::CdfxImport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read '{path}': {e}"))?;
+    let file = cdfx::parse(&text)?;
+    let image = RecordImage::from_records(&records);
+    with_db(&state, |db| {
+        let mut report = sync::plan_import(db, &image, &file);
+        // The file's own SHORT-NAME is a label chosen by whoever wrote it and is
+        // often unhelpful; the filename is what the user recognises.
+        report.file_name = std::path::Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(path.clone());
+        Ok(report)
+    })
+}
+
+/// Write every value the description can decode out to a CDFX file.
+#[tauri::command]
+pub fn cdfx_export(
+    path: String,
+    records: Vec<RecordData>,
+    state: tauri::State<A2lState>,
+) -> Result<usize, String> {
+    let image = RecordImage::from_records(&records);
+    let instances = with_db(&state, |db| Ok(sync::export(db, &image)))?;
+    if instances.is_empty() {
+        return Err("nothing in the image could be decoded to export".to_string());
+    }
+    let short_name = std::path::Path::new(&path)
+        .file_stem()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "CalibrationData".to_string());
+    let xml = cdfx::write(&short_name, &instances)?;
+    std::fs::write(&path, xml).map_err(|e| format!("cannot write '{path}': {e}"))?;
+    Ok(instances.len())
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ license = "MIT"
 
 [dependencies]
 a2lfile = "3.5"
+quick-xml = "0.41.0"
 serde = { version = "1", features = ["derive"] }
 
 [lints.rust]

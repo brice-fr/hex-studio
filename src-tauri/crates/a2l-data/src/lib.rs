@@ -13,6 +13,7 @@
 //! [`Category::Unsupported`](model::Category::Unsupported) rather than being
 //! silently omitted, so coverage statistics stay honest.
 
+pub mod cdfx;
 pub mod convert;
 pub mod db;
 pub mod decode;
@@ -21,6 +22,7 @@ pub mod formula;
 pub mod layout;
 pub mod model;
 pub mod stats;
+pub mod sync;
 
 pub use db::{A2lDatabase, Endian, ObjectPlan};
 pub use model::{

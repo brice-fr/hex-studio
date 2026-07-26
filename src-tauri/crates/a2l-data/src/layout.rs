@@ -237,6 +237,9 @@ pub struct ResolvedLayout {
     pub axis_index_decr: bool,
     /// The function values.
     pub fnc: Option<Field>,
+    /// True when `FNC_VALUES` declares `COLUMN_DIR`, so a multi-dimensional
+    /// object is stored with its *last* index varying fastest.
+    pub fnc_column_dir: bool,
     /// A rescale axis (`AXIS_RESCALE_X`). Its `count` is the number of
     /// *elements*, which is twice the pair count, since each pair holds an
     /// axis value followed by its index into the virtual full axis.
@@ -311,6 +314,11 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
     items.sort_by_key(|(pos, _, _, _)| *pos);
 
     let mut out = ResolvedLayout {
+        fnc_column_dir: rl
+            .fnc_values
+            .as_ref()
+            .map(|f| f.index_mode == a2lfile::IndexMode::ColumnDir)
+            .unwrap_or(false),
         axis_index_decr: rl
             .axis_pts_x
             .as_ref()

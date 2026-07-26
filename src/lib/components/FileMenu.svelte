@@ -22,6 +22,11 @@
     a2lLoading  = false,
     onLoadA2l   = () => {},
     onUnloadA2l = () => {},
+    // ── CDFX calibration data ─────────────────────────────────────────────────
+    cdfxReady    = false,           // an A2L *and* an image are both loaded
+    cdfxBusy     = false,
+    onImportCdfx = () => {},
+    onExportCdfx = () => {},
   } = $props();
 </script>
 
@@ -166,6 +171,32 @@
       {/if}
     </button>
   {/if}
+
+  <!-- ── CDFX import / export ── both need an A2L to name the parameters and
+       an image to hold them, so neither is offered until both are present -->
+  <button class="icon-btn" onclick={() => onImportCdfx()} disabled={!cdfxReady || cdfxBusy}
+          title={cdfxReady ? 'Import calibration data (CDFX)…' : 'Load a hex file and an A2L to import calibration data'}
+          aria-label="Import calibration data">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4h7l2 2h7a1 1 0 0 1 1 1v3"/>
+      <path d="M3 7v12a1 1 0 0 0 1 1h9"/>
+      <path d="M18 13v8"/>
+      <polyline points="15 18 18 21 21 18"/>
+    </svg>
+  </button>
+
+  <button class="icon-btn" onclick={() => onExportCdfx()} disabled={!cdfxReady || cdfxBusy}
+          title={cdfxReady ? 'Export calibration data (CDFX)…' : 'Load a hex file and an A2L to export calibration data'}
+          aria-label="Export calibration data">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4h7l2 2h7a1 1 0 0 1 1 1v3"/>
+      <path d="M3 7v12a1 1 0 0 0 1 1h9"/>
+      <path d="M18 21v-8"/>
+      <polyline points="15 16 18 13 21 16"/>
+    </svg>
+  </button>
 
   <div class="divider"></div>
 

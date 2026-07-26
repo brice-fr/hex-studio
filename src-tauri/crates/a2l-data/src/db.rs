@@ -112,6 +112,9 @@ pub struct ObjectPlan {
     /// For a COM_AXIS the order is a property of the referenced AXIS_PTS object
     /// rather than of the curve's own record layout.
     pub display_reversed: bool,
+    /// `MATRIX_DIM`, first dimension first. Empty for anything but a
+    /// multi-dimensional VAL_BLK.
+    pub matrix_dims: Vec<u32>,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -133,6 +136,55 @@ impl ObjectPlan {
 }
 
 impl ObjectPlan {
+    /// Where the element shown at `index` actually lives in the record.
+    ///
+    /// Two things can put presentation order at odds with storage order:
+    ///
+    /// * `INDEX_DECR`, which stores an axis highest-first — see
+    ///   [`display_reversed`](Self::display_reversed);
+    /// * `COLUMN_DIR` on a multi-dimensional `VAL_BLK`, which stores the matrix
+    ///   transposed. A CDFX writes such a block row by row, and the ASAM demo
+    ///   file holds the same 3x4 matrix twice, once each way, to make the point:
+    ///   read linearly, the `COLUMN_DIR` copy comes out `1,4,7,10,2,…` where the
+    ///   `ROW_DIR` copy comes out `1,2,3,…`.
+    ///
+    /// `count` is the number of elements in the field being indexed, which for
+    /// a rescale axis is not the same as the object's point count.
+    pub fn storage_slot(&self, index: u32, count: u32) -> u32 {
+        let index = self.transpose(index);
+        if self.display_reversed && count > 0 {
+            count - 1 - index
+        } else {
+            index
+        }
+    }
+
+    /// Map a row-major index onto its column-major slot, when the layout calls
+    /// for it. Identity for everything else, which is nearly everything.
+    fn transpose(&self, index: u32) -> u32 {
+        if !self.layout.fnc_column_dir || self.matrix_dims.len() < 2 {
+            return index;
+        }
+        // Decompose with the first dimension varying fastest — the order a CDFX
+        // and the data view both present — then recompose with the last one
+        // varying fastest, which is how COLUMN_DIR stores it.
+        let dims = &self.matrix_dims;
+        let mut rest = index;
+        let mut subscripts = Vec::with_capacity(dims.len());
+        for d in dims {
+            subscripts.push(rest % d);
+            rest /= d;
+        }
+        if rest != 0 {
+            return index; // out of range; leave it to the caller's bounds check
+        }
+        let mut slot = subscripts[0];
+        for i in 1..dims.len() {
+            slot = slot * dims[i] + subscripts[i];
+        }
+        slot
+    }
+
     /// Total bytes the object occupies in the image.
     pub fn byte_size(&self) -> u32 {
         self.layout.total_size
@@ -433,6 +485,7 @@ impl A2lDatabase {
                 .map(|v| v.characteristic_list.clone())
                 .unwrap_or_default(),
             display_reversed,
+            matrix_dims: matrix_dims(ch),
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -496,6 +549,7 @@ impl A2lDatabase {
             virtual_formula: None,
             virtual_inputs: Vec::new(),
             display_reversed,
+            matrix_dims: Vec::new(),
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -558,6 +612,7 @@ impl A2lDatabase {
             virtual_formula: None,
             virtual_inputs: Vec::new(),
             display_reversed: false,
+            matrix_dims: Vec::new(),
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,
@@ -746,6 +801,21 @@ fn classify_characteristic(
     }
 }
 
+/// The declared MATRIX_DIM, zero and absent dimensions dropped.
+fn matrix_dims(ch: &Characteristic) -> Vec<u32> {
+    ch.matrix_dim
+        .as_ref()
+        .map(|md| {
+            md.dim_list
+                .iter()
+                .copied()
+                .filter(|d| *d > 0)
+                .map(u32::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// How many points the record is sized for.
 ///
 /// MATRIX_DIM is the modern spelling and wins; NUMBER is the deprecated one;
@@ -796,6 +866,84 @@ mod tests {
             "a2lfile's Debug output for SystemConstant changed shape; the name \
              can no longer be recovered and every sysc() reference would break"
         );
+    }
+
+    /// A bare plan carrying only the fields the index mapping consults.
+    fn plan_for(dims: &[u32], column_dir: bool, reversed: bool) -> ObjectPlan {
+        ObjectPlan {
+            name: "T".into(),
+            description: String::new(),
+            kind: ObjKind::Characteristic,
+            category: Category::Curve,
+            address: 0,
+            layout: ResolvedLayout {
+                fnc_column_dir: column_dir,
+                ..Default::default()
+            },
+            conv: ConvInfo::identity("CM"),
+            axis_conv: None,
+            axis: AxisSource::None,
+            axis_kind: "",
+            bit_mask: 0,
+            virtual_formula: None,
+            virtual_inputs: Vec::new(),
+            display_reversed: reversed,
+            matrix_dims: dims.to_vec(),
+            endian: Endian::Little,
+            lower_limit: 0.0,
+            upper_limit: 0.0,
+            declared_points: dims.iter().product::<u32>().max(1),
+            format_override: None,
+            note: None,
+        }
+    }
+
+    fn slots(plan: &ObjectPlan, count: u32) -> Vec<u32> {
+        (0..count).map(|i| plan.storage_slot(i, count)).collect()
+    }
+
+    #[test]
+    fn row_dir_stores_in_presentation_order() {
+        let plan = plan_for(&[3, 4], false, false);
+        assert_eq!(slots(&plan, 12), (0..12).collect::<Vec<_>>());
+    }
+
+    /// A 3x4 COLUMN_DIR block is stored transposed: presentation walks the
+    /// first dimension fastest, storage walks the last.
+    #[test]
+    fn column_dir_maps_row_major_onto_column_major() {
+        let plan = plan_for(&[3, 4], true, false);
+        assert_eq!(
+            slots(&plan, 12),
+            vec![0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]
+        );
+    }
+
+    /// Whatever the shape, the mapping must be a permutation — every element
+    /// reachable exactly once, or reading loses data and writing doubles up.
+    #[test]
+    fn column_dir_mapping_is_a_permutation() {
+        for dims in [vec![3, 4], vec![4, 3], vec![2, 3, 4], vec![5, 1, 2]] {
+            let count: u32 = dims.iter().product();
+            let plan = plan_for(&dims, true, false);
+            let mut seen = slots(&plan, count);
+            seen.sort_unstable();
+            assert_eq!(seen, (0..count).collect::<Vec<_>>(), "dims {dims:?}");
+        }
+    }
+
+    /// COLUMN_DIR only means something across dimensions; a flat array is
+    /// stored in the order it is read, whatever the record layout declares.
+    #[test]
+    fn column_dir_is_identity_for_one_dimension() {
+        assert_eq!(slots(&plan_for(&[6], true, false), 6), (0..6).collect::<Vec<_>>());
+        assert_eq!(slots(&plan_for(&[], true, false), 6), (0..6).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn index_decr_reverses() {
+        let plan = plan_for(&[], false, true);
+        assert_eq!(slots(&plan, 4), vec![3, 2, 1, 0]);
     }
 }
 

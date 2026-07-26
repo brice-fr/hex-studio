@@ -192,12 +192,8 @@ pub fn encode_point(
     if index >= points {
         return Err(format!("point {index} is past the end ({points} points)"));
     }
-    // Undo the presentation reversal to reach the stored element.
-    let slot = if plan.display_reversed {
-        points - 1 - index
-    } else {
-        index
-    };
+    // Undo the presentation ordering to reach the stored element.
+    let slot = plan.storage_slot(index, points);
 
     let raw = conv
         .to_raw(phys)

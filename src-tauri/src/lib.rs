@@ -212,6 +212,8 @@ pub fn run() {
             a2l::a2l_stats,
             a2l::a2l_encode_value,
             a2l::a2l_encode_text,
+            a2l::cdfx_preview,
+            a2l::cdfx_export,
             a2l::a2l_encode_point,
         ])
         .build(tauri::generate_context!())

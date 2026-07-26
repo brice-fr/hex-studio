@@ -206,3 +206,48 @@ export async function a2lEncodeText(name, text, records) {
 export async function a2lEncodePoint(name, target, index, phys, records) {
   return invoke('a2l_encode_point', { name, target, index, phys, records });
 }
+
+/**
+ * @typedef {Object} CdfxChange
+ * @property {string} name           A2L object name.
+ * @property {'value'|'axis'|'text'} target
+ * @property {number|null} index     Point index for a 1D object.
+ * @property {string} current        The value in the image now.
+ * @property {string} incoming       The value the file would write.
+ * @property {number} address
+ * @property {number[]} bytes
+ */
+
+/**
+ * @typedef {Object} CdfxImport
+ * @property {string} file_name
+ * @property {number} file_instances  Parameters found in the file.
+ * @property {number} matched         Resolved to a writable A2L object.
+ * @property {number} unchanged       Matched and already in agreement.
+ * @property {string[]} not_in_a2l
+ * @property {{name: string, reason: string}[]} skipped
+ * @property {CdfxChange[]} changes
+ */
+
+/**
+ * Read a CDFX file and report what importing it would change.
+ *
+ * Nothing is written: each change carries its own bytes so the caller can show
+ * the difference first and then apply them all as one undoable edit.
+ * @param {string} path
+ * @param {HexRecord[]} records
+ * @returns {Promise<CdfxImport>}
+ */
+export async function cdfxPreview(path, records) {
+  return invoke('cdfx_preview', { path, records });
+}
+
+/**
+ * Write every decodable value out to a CDFX file.
+ * @param {string} path
+ * @param {HexRecord[]} records
+ * @returns {Promise<number>} How many parameters were written.
+ */
+export async function cdfxExport(path, records) {
+  return invoke('cdfx_export', { path, records });
+}

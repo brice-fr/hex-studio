@@ -10,7 +10,7 @@
   import { open, save, message } from '@tauri-apps/plugin-dialog';
   import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile,
            a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText,
-           a2lEncodePoint } from '$lib/api.js';
+           a2lEncodePoint, cdfxPreview, cdfxExport } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
@@ -28,6 +28,7 @@
   import AboutDialog from '$lib/components/AboutDialog.svelte';
   import ImportBinaryDialog from '$lib/components/ImportBinaryDialog.svelte';
   import PreferencesDialog from '$lib/components/PreferencesDialog.svelte';
+  import CdfxImportDialog from '$lib/components/CdfxImportDialog.svelte';
   import FileAssocDialog from '$lib/components/FileAssocDialog.svelte';
   import CompareDialog  from '$lib/components/CompareDialog.svelte';
   import FillDialog     from '$lib/components/FillDialog.svelte';
@@ -145,6 +146,14 @@
 
   const a2lFileName = $derived(a2lPath ? (a2lPath.split(/[\\/]/).at(-1) ?? '') : '');
 
+  // ── CDFX calibration data ────────────────────────────────────────────────
+  let cdfxReport = $state(/** @type {any} */ (null));
+  let cdfxBusy   = $state(false);
+
+  /** Both halves are needed: a CDFX names parameters the A2L defines and
+   *  carries values that only mean something against a loaded image. */
+  const cdfxReady = $derived(a2lSummary !== null && records.length > 0);
+
   // Remember which A2L was last used with a given hex file so the load dialog
   // can pre-fill it. Deliberately not auto-loaded — the association is a hint,
   // not a fact, and silently decoding against the wrong A2L is worse than
@@ -198,6 +207,8 @@
   let exportHtmlMenuItem    = null;
   let compareMenuItem       = null;
   let a2lUnloadMenuItem     = null;
+  let cdfxImportMenuItem    = null;
+  let cdfxExportMenuItem    = null;
   let hexViewMenuItem       = null;
   let dataViewMenuItem      = null;
 
@@ -215,6 +226,9 @@
   $effect(() => { const v = records.length > 0; compareMenuItem?.setEnabled(v); });
   $effect(() => { const v = a2lSummary !== null; a2lUnloadMenuItem?.setEnabled(v); });
   $effect(() => { const v = a2lSummary !== null; dataViewMenuItem?.setEnabled(v); });
+  // CDFX needs both halves: the A2L names the parameters, the image holds them.
+  $effect(() => { const v = cdfxReady; cdfxImportMenuItem?.setEnabled(v); });
+  $effect(() => { const v = cdfxReady; cdfxExportMenuItem?.setEnabled(v); });
   $effect(() => { const v = viewMode === 'hex';  hexViewMenuItem?.setChecked(v); });
   $effect(() => { const v = viewMode === 'data'; dataViewMenuItem?.setChecked(v); });
 
@@ -497,6 +511,71 @@
       status = `${name} ${label}[${index}] → ${encoded.phys}`;
     } catch (err) {
       status = `Cannot write ${name}[${index}]: ${err}`;
+    }
+  }
+
+  async function handleCdfxImportOpen() {
+    if (!cdfxReady) return;
+    const path = await open({
+      multiple: false,
+      filters: [{ name: 'Calibration data', extensions: ['cdfx', 'cdf', 'xml'] }],
+    });
+    if (typeof path !== 'string') return;
+    await runCdfxPreview(path);
+  }
+
+  async function runCdfxPreview(path) {
+    cdfxBusy = true;
+    status   = 'Reading calibration data…';
+    try {
+      cdfxReport = await cdfxPreview(path, records);
+      status     = '';
+    } catch (err) {
+      cdfxReport = null;
+      status     = '';
+      await message(String(err), { kind: 'error', title: 'Cannot read CDFX file' });
+    } finally {
+      cdfxBusy = false;
+    }
+  }
+
+  /**
+   * Apply an approved import.
+   *
+   * Every change is written under a single pushUndo, so a calibration set that
+   * touches two hundred parameters still costs the user one Cmd+Z — which is
+   * how they think of it: one import, one undo.
+   */
+  function handleCdfxApply() {
+    const changes = cdfxReport?.changes ?? [];
+    cdfxReport = null;
+    if (!changes.length) return;
+
+    pushUndo(`Import ${changes.length} value${changes.length === 1 ? '' : 's'} from CDFX`);
+    let updated = cloneRecords(records);
+    for (const c of changes) updated = writeBytes(updated, c.address, c.bytes);
+    records = updated;
+
+    const params = new Set(changes.map((c) => c.name)).size;
+    status = `Imported ${changes.length} value${changes.length === 1 ? '' : 's'} across ${params} parameter${params === 1 ? '' : 's'}`;
+  }
+
+  async function handleCdfxExport() {
+    if (!cdfxReady) return;
+    const suggested = (a2lFileName || 'calibration').replace(/\.a2l$/i, '') + '.cdfx';
+    const path = await save({
+      defaultPath: suggested,
+      filters: [{ name: 'Calibration data', extensions: ['cdfx'] }],
+    });
+    if (!path) return;
+    cdfxBusy = true;
+    try {
+      const count = await cdfxExport(path, records);
+      status = `Exported ${count} parameter${count === 1 ? '' : 's'} to ${path.split(/[\\/]/).at(-1)}`;
+    } catch (err) {
+      await message(String(err), { kind: 'error', title: 'Cannot export CDFX file' });
+    } finally {
+      cdfxBusy = false;
     }
   }
 
@@ -869,6 +948,9 @@
               await MenuItem.new({ id: 'a2l-load', text: 'Load associated A2L to enable data view…', accelerator: 'CmdOrCtrl+Shift+D', action: handleA2lLoadOpen }),
               (a2lUnloadMenuItem = await MenuItem.new({ id: 'a2l-unload', text: 'Unload A2L', enabled: false, action: handleA2lUnload })),
               await PredefinedMenuItem.new({ item: 'Separator' }),
+              (cdfxImportMenuItem = await MenuItem.new({ id: 'cdfx-import', text: 'Import Calibration Data (CDFX)…', enabled: false, action: handleCdfxImportOpen })),
+              (cdfxExportMenuItem = await MenuItem.new({ id: 'cdfx-export', text: 'Export Calibration Data (CDFX)…', enabled: false, action: handleCdfxExport })),
+              await PredefinedMenuItem.new({ item: 'Separator' }),
               (compareMenuItem = await MenuItem.new({ id: 'compare', text: 'Compare with…', enabled: false, action: handleCompareOpen })),
               await PredefinedMenuItem.new({ item: 'Separator' }),
               await PredefinedMenuItem.new({ item: 'CloseWindow' }),
@@ -954,6 +1036,12 @@
             // Tauri's drag-drop is window-global rather than per-element, so
             // route by extension instead of by where the pointer landed.
             if (/\.a2l$/i.test(paths[0]))   handleA2lLoadPath(paths[0]);
+            // A dropped CDFX opens the same preview the menu does, so a drop
+            // still never writes anything without being shown first.
+            else if (/\.cdfx?$/i.test(paths[0])) {
+              if (cdfxReady) runCdfxPreview(paths[0]);
+              else status = 'Load a hex file and an A2L before importing calibration data';
+            }
             else if (showCompare)           compareFile = paths[0];
             else                            handleOpenPath(paths[0]);
           }
@@ -1098,6 +1186,12 @@
   onClose={() => (showImportMerge = false)}
 />
 
+<CdfxImportDialog
+  report={cdfxReport}
+  onApply={handleCdfxApply}
+  onClose={() => (cdfxReport = null)}
+/>
+
 <SelectRangeDialog
   open={showSelectRange}
   prefillStart={selectRangePrefStart}
@@ -1150,6 +1244,10 @@
     {a2lLoading}
     onLoadA2l={handleA2lLoadOpen}
     onUnloadA2l={handleA2lUnload}
+    {cdfxReady}
+    {cdfxBusy}
+    onImportCdfx={handleCdfxImportOpen}
+    onExportCdfx={handleCdfxExport}
   />
 
   <div class="content-area">
