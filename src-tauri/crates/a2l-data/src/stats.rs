@@ -72,6 +72,9 @@ pub fn compute(
             Presence::Full => s.present_full += 1,
             Presence::Partial => s.present_partial += 1,
             Presence::Absent => s.absent += 1,
+            // Extent unknown, so it can be neither counted as missing nor
+            // credited as described.
+            Presence::Unknown => s.presence_unknown += 1,
         }
         let size = plan.byte_size();
         if size > 0 {

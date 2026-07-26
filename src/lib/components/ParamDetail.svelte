@@ -628,6 +628,7 @@
   .pres.full    { color: var(--c-diff-cmp-only); }
   .pres.partial { color: var(--c-diff-changed); }
   .pres.absent  { color: var(--c-dim); }
+  .pres.unknown { color: var(--c-muted); font-style: italic; }
 
   /* ── Points table ── */
   .sub-header {

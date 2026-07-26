@@ -137,7 +137,9 @@ fn read_field(bytes: &[u8], field: Field, endian: Endian) -> Vec<f64> {
 pub fn presence_of(src: &dyn ByteSource, plan: &ObjectPlan) -> Presence {
     let size = plan.byte_size();
     if size == 0 {
-        return Presence::Absent;
+        // A zero extent means the record layout could not be resolved, not
+        // that the image is missing anything.
+        return Presence::Unknown;
     }
     let present = src.present_count(plan.address, size);
     if present == 0 {
@@ -321,6 +323,47 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
                 }
             } else if presence == Presence::Absent {
                 display = "absent".into();
+            }
+        }
+
+        // A rescale axis stores (axis value, index) pairs rather than plain
+        // points, so it is summarised by its pair count and the span of the
+        // axis values — the first of each pair.
+        Category::Curve if plan.layout.rescale.is_some() => {
+            let field = plan.layout.rescale.expect("checked by the guard");
+            let n = effective_points(plan, bytes.as_deref());
+            point_count = Some(n);
+            if let Some(bytes) = &bytes {
+                let used = Field {
+                    count: (n * 2).min(field.count),
+                    ..field
+                };
+                let raws = read_field(bytes, used, plan.endian);
+                let axis_phys: Vec<f64> = raws
+                    .iter()
+                    .step_by(2)
+                    .filter_map(|r| match plan.conv.conversion.to_phys(*r) {
+                        Phys::Num(v) => Some(v),
+                        _ => None,
+                    })
+                    .collect();
+                if axis_phys.is_empty() {
+                    display = format!("{n} pairs");
+                } else {
+                    let lo = axis_phys.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let hi = axis_phys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    phys_min = Some(lo);
+                    phys_max = Some(hi);
+                    display = format!(
+                        "{} … {}",
+                        format_number(lo, &fmt),
+                        format_number(hi, &fmt)
+                    );
+                }
+            } else if presence == Presence::Absent {
+                display = "absent".into();
+            } else {
+                display = format!("{n} pairs");
             }
         }
 
@@ -521,6 +564,41 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         }
         to_points(raws, &p.conv.conversion, &p.conv.format)
     };
+
+    // A rescale axis is a list of (axis value, index) pairs. Presenting the
+    // axis value against its index is the honest reading: the second element
+    // is a position in the virtual full axis, not a physical quantity, so it
+    // deliberately skips the conversion.
+    if let Some(field) = plan.layout.rescale {
+        let used = Field {
+            count: (n * 2).min(field.count),
+            ..field
+        };
+        let raws = read_field(&bytes, used, plan.endian);
+        let axis = to_points(
+            raws.iter().step_by(2).copied().collect(),
+            &plan.conv.conversion,
+            &fmt,
+        );
+        let values = to_points(
+            raws.iter().skip(1).step_by(2).copied().collect(),
+            &crate::convert::Conversion::Identical,
+            "",
+        );
+        return Some(ParamDetail {
+            name: plan.name.clone(),
+            description: plan.description.clone(),
+            address: plan.address,
+            byte_size: size,
+            axis,
+            values,
+            axis_unit: plan.display_unit().to_string(),
+            value_unit: "index".to_string(),
+            axis_kind: "RES_AXIS".to_string(),
+            axis_ref: None,
+            bytes,
+        });
+    }
 
     // Function values.
     let values = match plan.layout.fnc.or(plan.layout.axis_pts) {

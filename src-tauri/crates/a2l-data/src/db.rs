@@ -403,7 +403,10 @@ impl A2lDatabase {
         let (category, note, layout) = match rl {
             Some(rl) => {
                 let resolved = layout::resolve(rl, &self.aligns, declared_points);
-                if resolved.axis_pts.is_none() && resolved.fnc.is_none() {
+                if resolved.axis_pts.is_none()
+                    && resolved.fnc.is_none()
+                    && resolved.rescale.is_none()
+                {
                     (
                         Category::Unsupported,
                         Some("record layout defines no axis points".to_string()),

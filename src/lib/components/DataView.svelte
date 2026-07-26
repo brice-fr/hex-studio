@@ -302,7 +302,12 @@
 
   /** A computed parameter was never meant to be in the image. */
   const isVirtual = (r) => r.category === 'virtual';
-  /** Declared somewhere real, but those bytes are not in this image. */
+  /**
+   * Declared somewhere real, but those bytes are not in this image.
+   *
+   * Excludes both computed parameters, which were never stored, and objects
+   * whose extent could not be resolved, where nothing is known either way.
+   */
   const isMissing = (r) => r.presence === 'absent' && !isVirtual(r);
 
   const counts = $derived.by(() => {

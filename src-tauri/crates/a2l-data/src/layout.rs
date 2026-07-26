@@ -237,6 +237,10 @@ pub struct ResolvedLayout {
     pub axis_index_decr: bool,
     /// The function values.
     pub fnc: Option<Field>,
+    /// A rescale axis (`AXIS_RESCALE_X`). Its `count` is the number of
+    /// *elements*, which is twice the pair count, since each pair holds an
+    /// axis value followed by its index into the virtual full axis.
+    pub rescale: Option<Field>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -244,6 +248,19 @@ enum Kind {
     NoAxisPts,
     AxisPts,
     Fnc,
+    Rescale,
+    /// Pure padding: it occupies bytes and shifts what follows, but holds
+    /// nothing to read.
+    Reserved,
+}
+
+/// Bytes occupied by a RESERVED field.
+fn reserved_size(size: a2lfile::DataTypeSize) -> u32 {
+    match size {
+        a2lfile::DataTypeSize::Byte => 1,
+        a2lfile::DataTypeSize::Word => 2,
+        a2lfile::DataTypeSize::Long => 4,
+    }
 }
 
 fn align_up(offset: u32, border: u32) -> u32 {
@@ -272,6 +289,25 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
     if let Some(f) = &rl.fnc_values {
         items.push((f.position, Kind::Fnc, f.datatype, n_points));
     }
+    // A rescale axis replaces AXIS_PTS_X with pairs, and brings its own count
+    // field and padding.
+    if let Some(f) = &rl.no_rescale_x {
+        items.push((f.position, Kind::NoAxisPts, f.datatype, 1));
+    }
+    if let Some(f) = &rl.axis_rescale_x {
+        let pairs = n_points.min(u32::from(f.max_number_of_rescale_pairs).max(1));
+        items.push((f.position, Kind::Rescale, f.datatype, pairs * 2));
+    }
+    for r in &rl.reserved {
+        // RESERVED declares a width rather than a datatype; model it as that
+        // many bytes so it displaces the fields after it.
+        items.push((
+            r.position,
+            Kind::Reserved,
+            DataType::Ubyte,
+            reserved_size(r.data_size),
+        ));
+    }
     items.sort_by_key(|(pos, _, _, _)| *pos);
 
     let mut out = ResolvedLayout {
@@ -279,6 +315,11 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
             .axis_pts_x
             .as_ref()
             .map(|f| f.index_incr == IndexOrder::IndexDecr)
+            .or_else(|| {
+                rl.axis_rescale_x
+                    .as_ref()
+                    .map(|f| f.index_incr == IndexOrder::IndexDecr)
+            })
             .unwrap_or(false),
         ..Default::default()
     };
@@ -296,6 +337,9 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
             Kind::NoAxisPts => out.no_axis_pts = Some(field),
             Kind::AxisPts => out.axis_pts = Some(field),
             Kind::Fnc => out.fnc = Some(field),
+            Kind::Rescale => out.rescale = Some(field),
+            // Padding only: it has already advanced the offset above.
+            Kind::Reserved => {}
         }
     }
     out.total_size = offset;

@@ -239,7 +239,7 @@ fn coverage_statistics_are_self_consistent() {
     );
     assert!(s.strings > 0, "the demo file declares an ASCII string");
     assert_eq!(
-        s.present_full + s.present_partial + s.absent + s.virtuals,
+        s.present_full + s.present_partial + s.absent + s.presence_unknown + s.virtuals,
         s.total_objects
     );
 
@@ -419,6 +419,76 @@ fn ascii_string_decodes_with_its_capacity() {
     assert_eq!(detail.value_unit, "", "nor in the parameter pane");
 }
 
+/// A rescale axis uses NO_RESCALE_X / RESERVED / AXIS_RESCALE_X, none of which
+/// the resolver originally understood. Every field was skipped, the extent came
+/// out zero, and the object was reported as missing from the image even though
+/// its bytes are plainly there at 0x8103D0.
+#[test]
+fn rescale_axis_resolves_its_layout_and_pairs() {
+    let Some((db, img)) = open_demo() else { return };
+    let plan = db
+        .plan_axis_pts("ASAM.C.AXIS_PTS.RESCALE")
+        .expect("axis present");
+
+    assert_eq!(plan.address, 0x8103D0);
+    assert_eq!(plan.category, Category::Curve, "no longer unsupported");
+    // 1 count byte + 1 RESERVED pad + 5 pairs of UBYTE.
+    assert_eq!(plan.byte_size(), 12);
+
+    let row = decode::row_for(&img, &plan);
+    assert_eq!(
+        row.presence,
+        Presence::Full,
+        "the image does contain these bytes"
+    );
+
+    let detail = decode::detail_for(&db, &img, "ASAM.C.AXIS_PTS.RESCALE").expect("detail");
+    assert_eq!(detail.axis_kind, "RES_AXIS");
+    // Stored 05 FF | 11 20 14 40 20 80 B0 D0 D2 FF — five (value, index) pairs
+    // after the count byte and its padding.
+    let axis: Vec<f64> = detail.axis.iter().map(|p| p.phys).collect();
+    let idx: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
+    assert_eq!(axis, vec![17.0, 20.0, 32.0, 176.0, 210.0]);
+    assert_eq!(idx, vec![32.0, 64.0, 128.0, 208.0, 255.0]);
+    assert!(
+        axis.windows(2).all(|w| w[1] > w[0]),
+        "a rescale axis ascends: {axis:?}"
+    );
+}
+
+/// An extent we cannot resolve must not be reported as missing data — that
+/// would blame the image for a gap in this crate.
+#[test]
+fn unresolvable_extent_reports_unknown_not_absent() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+
+    for row in &rows {
+        if row.byte_size == 0 {
+            assert_eq!(
+                row.presence,
+                Presence::Unknown,
+                "{}: zero extent must read as unknown",
+                row.name
+            );
+        } else {
+            assert_ne!(
+                row.presence,
+                Presence::Unknown,
+                "{}: a known extent must yield a real verdict",
+                row.name
+            );
+        }
+    }
+
+    let s = stats::compute(&db, &img, false);
+    assert_eq!(
+        s.present_full + s.present_partial + s.absent + s.presence_unknown + s.virtuals,
+        s.total_objects,
+        "every object lands in exactly one bucket"
+    );
+}
+
 /// A VIRTUAL_CHARACTERISTIC is computed and never stored. All four in the demo
 /// file declare address 0x0, so they must not be mistaken for data that merely
 /// happens to be missing from the image.
@@ -465,9 +535,9 @@ fn virtuals_are_excluded_from_presence_and_coverage() {
 
     assert_eq!(s.virtuals, 4);
     assert_eq!(
-        s.present_full + s.present_partial + s.absent + s.virtuals,
+        s.present_full + s.present_partial + s.absent + s.presence_unknown + s.virtuals,
         s.total_objects,
-        "every object is either placed in the image or computed"
+        "every object is either placed in the image, unresolvable, or computed"
     );
 
     // Their extent must not be credited to the description. All four sit at

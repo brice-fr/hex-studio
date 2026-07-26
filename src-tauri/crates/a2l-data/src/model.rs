@@ -43,6 +43,11 @@ pub enum Presence {
     Partial,
     /// No bytes are present.
     Absent,
+    /// The object's extent could not be determined, so nothing can be said
+    /// about the image. Distinct from `Absent`, which is a claim that the
+    /// bytes are missing — reporting that for a layout we simply failed to
+    /// resolve would blame the image for a gap in this crate.
+    Unknown,
 }
 
 /// Display/handling category, driven by what this crate can actually decode.
@@ -186,6 +191,9 @@ pub struct CoverageStats {
     pub present_full: usize,
     pub present_partial: usize,
     pub absent: usize,
+    /// Objects whose extent could not be resolved, so nothing is claimed about
+    /// whether the image contains them.
+    pub presence_unknown: usize,
 }
 
 /// Bytes to write, produced by encoding a physical value. Applying them is the
