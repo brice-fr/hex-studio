@@ -755,10 +755,18 @@ fn characteristic_point_count(ch: &Characteristic, category: Category) -> u32 {
         return 1;
     }
     if let Some(md) = &ch.matrix_dim {
-        if let Some(first) = md.dim_list.first() {
-            if *first > 0 {
-                return u32::from(*first);
-            }
+        // MATRIX_DIM may declare several dimensions and the object stores their
+        // product. Taking only the first truncates a 3x4 VAL_BLK to 3 of its 12
+        // elements, and sizes it at a quarter of the bytes it really occupies.
+        let dims: Vec<u32> = md
+            .dim_list
+            .iter()
+            .copied()
+            .filter(|d| *d > 0)
+            .map(u32::from)
+            .collect();
+        if !dims.is_empty() {
+            return dims.iter().product();
         }
     }
     if let Some(n) = &ch.number {

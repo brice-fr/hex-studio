@@ -426,6 +426,22 @@ fn a_shared_axis_refuses_edits_and_says_where_to_go() {
     assert!(err.contains("FIX_AXIS"), "{err}");
 }
 
+/// A VAL_BLK declaring MATRIX_DIM 3 4 holds all twelve elements, not three.
+/// Expected values are those the shipped CDFX records for this array.
+#[test]
+fn multi_dimensional_val_blk_reads_every_element() {
+    let Some((db, img)) = open_demo() else { return };
+    let name = "ASAM.C.ARRAY.SWORD.MATRIX_DIM_3_4.ROW_DIR";
+    let plan = db.plan_characteristic(name).expect("array present");
+
+    assert_eq!(plan.declared_points, 12, "3 x 4, not just the first dimension");
+    assert_eq!(plan.byte_size(), 24, "twelve SWORDs");
+
+    let detail = decode::detail_for(&db, &img, name).expect("detail");
+    let values: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
+    assert_eq!(values, (1..=12).map(f64::from).collect::<Vec<_>>());
+}
+
 /// A standalone AXIS_PTS object is itself INDEX_DECR here, so its points must
 /// also read ascending. Per the CDFX.
 #[test]
