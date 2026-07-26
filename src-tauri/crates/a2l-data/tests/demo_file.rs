@@ -401,6 +401,32 @@ fn ascii_string_decodes_with_its_capacity() {
     assert_eq!(row.text_max_len, Some(41));
     assert_eq!(row.display, "ASAM Test");
     assert!(row.editable, "printable content should be editable");
+
+    // A2L makes every CHARACTERISTIC name a COMPU_METHOD, and this one inherits
+    // the shared CM.IDENTICAL whose unit is "hours". Text is not a quantity, so
+    // that unit must not be carried through.
+    assert_eq!(
+        db.conversion_for("CM.IDENTICAL").unit,
+        "hours",
+        "the referenced conversion really does declare a unit"
+    );
+    assert_eq!(row.unit, "", "a string must not display an inherited unit");
+
+    let detail = decode::detail_for(&db, &img, "ASAM.C.ASCII.UBYTE.NUMBER_42").expect("detail");
+    assert_eq!(detail.value_unit, "", "nor in the parameter pane");
+}
+
+/// Numeric parameters sharing that same conversion must keep their unit.
+#[test]
+fn numeric_scalars_keep_their_unit() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let row = rows
+        .iter()
+        .find(|r| r.name == "ASAM.C.SCALAR.UBYTE.IDENTICAL")
+        .expect("scalar present");
+    assert_eq!(row.conversion, "CM.IDENTICAL", "same conversion as the string");
+    assert_eq!(row.unit, "hours", "a quantity keeps its declared unit");
 }
 
 /// Writing must rewrite the whole array, not just the new characters, or the

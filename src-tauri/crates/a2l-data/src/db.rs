@@ -128,6 +128,21 @@ impl ObjectPlan {
     pub fn datatype(&self) -> Option<DataType> {
         self.layout.fnc.map(|f| f.datatype)
     }
+
+    /// The unit to display, which is empty for text.
+    ///
+    /// A2L requires every CHARACTERISTIC to name a COMPU_METHOD, including an
+    /// ASCII one where no conversion is meaningful. Such a reference commonly
+    /// points at a shared identity conversion — in the ASAM demo file every
+    /// ASCII string inherits `CM.IDENTICAL`, which declares "hours". A
+    /// character array is not a quantity, so that unit is an artefact of the
+    /// reference rather than a property of the data.
+    pub fn display_unit(&self) -> &str {
+        match self.category {
+            Category::Ascii => "",
+            _ => &self.conv.unit,
+        }
+    }
 }
 
 /// A parsed A2L description plus the derived defaults decoding depends on.

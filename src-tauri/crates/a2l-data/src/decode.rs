@@ -421,7 +421,7 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
             .unwrap_or("—")
             .to_string(),
         presence,
-        unit: plan.conv.unit.clone(),
+        unit: plan.display_unit().to_string(),
         conversion: plan.conv.name.clone(),
         conversion_type: plan.conv.type_name.to_string(),
         raw_hex,
@@ -567,7 +567,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         axis,
         values,
         axis_unit: axis_conv.map(|c| c.unit).unwrap_or_default(),
-        value_unit: plan.conv.unit.clone(),
+        value_unit: plan.display_unit().to_string(),
         axis_kind: plan.axis_kind.to_string(),
         axis_ref: plan.axis.reference().map(str::to_string),
         bytes,
