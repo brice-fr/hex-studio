@@ -219,6 +219,69 @@ fn phys_step_for(plan: &ObjectPlan, raw: f64, dt: DataType) -> Option<f64> {
     }
 }
 
+/// Guards against a formula chain that never terminates, alongside the cycle
+/// check — a malformed file could nest references arbitrarily deep.
+const MAX_FORMULA_DEPTH: usize = 16;
+
+/// The physical value of a stored scalar, for use as a formula input.
+fn scalar_phys(src: &dyn ByteSource, plan: &ObjectPlan) -> Option<f64> {
+    let field = plan.layout.fnc?;
+    let size = layout::datatype_size(field.datatype);
+    let bytes = src.read(plan.address + field.offset, size)?;
+    let stored = read_element(&bytes, field.datatype, plan.endian)?;
+    let raw = layout::mask_extract(stored, plan.bit_mask, field.datatype);
+    match plan.conv.conversion.to_phys(raw) {
+        Phys::Num(v) => Some(v),
+        _ => None,
+    }
+}
+
+/// Evaluate a VIRTUAL_CHARACTERISTIC.
+///
+/// Inputs bind to `X1`, `X2`, … in declaration order and may themselves be
+/// virtual — the demo file's REF_3 reads two other computed parameters — so
+/// this recurses, tracking the chain to refuse a circular definition rather
+/// than looping until the stack gives out.
+fn eval_computed(
+    db: &A2lDatabase,
+    src: &dyn ByteSource,
+    plan: &ObjectPlan,
+    chain: &mut Vec<String>,
+) -> Result<f64, String> {
+    if chain.iter().any(|n| n == &plan.name) {
+        return Err(format!("'{}' refers to itself", plan.name));
+    }
+    if chain.len() >= MAX_FORMULA_DEPTH {
+        return Err("formula references nest too deeply".to_string());
+    }
+
+    let text = plan
+        .virtual_formula
+        .as_deref()
+        .ok_or_else(|| "no formula".to_string())?;
+    let formula = crate::formula::Formula::parse(text)?;
+
+    chain.push(plan.name.clone());
+    let mut vars = Vec::with_capacity(plan.virtual_inputs.len());
+    for input in &plan.virtual_inputs {
+        let ip = db
+            .plan_any(input)
+            .ok_or_else(|| format!("input '{input}' not found"))?;
+        let value = if ip.category == Category::Virtual {
+            eval_computed(db, src, &ip, chain)?
+        } else {
+            scalar_phys(src, &ip).ok_or_else(|| format!("input '{input}' has no value"))?
+        };
+        vars.push(value);
+    }
+    chain.pop();
+
+    formula.eval(&crate::formula::Context {
+        vars: &vars,
+        constants: db.system_constants(),
+    })
+}
+
 /// What a fixed-width character array holds.
 struct AsciiField {
     /// Text up to the first NUL, with non-printable bytes shown as `.`.
@@ -277,7 +340,7 @@ fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
 }
 
 /// Build one table row for an object.
-pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
+pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
     let presence = presence_of(src, plan);
     let bytes = if presence == Presence::Full {
         src.read(plan.address, plan.byte_size())
@@ -422,15 +485,21 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
             }
         }
 
-        // Computed from other parameters, so there is nothing to read. Showing
-        // the formula is more use than showing "absent" for a value that was
-        // never meant to be stored.
-        Category::Virtual => {
-            display = plan
-                .virtual_formula
-                .clone()
-                .unwrap_or_else(|| "computed".to_string());
-        }
+        // Computed from other parameters rather than read from the image.
+        // Falls back to showing the formula when it cannot be evaluated, which
+        // is more use than a bare dash.
+        Category::Virtual => match eval_computed(db, src, plan, &mut Vec::new()) {
+            Ok(v) => {
+                display = format_number(v, &fmt);
+                phys_num = Some(v);
+            }
+            Err(_) => {
+                display = plan
+                    .virtual_formula
+                    .clone()
+                    .unwrap_or_else(|| "computed".to_string());
+            }
+        },
 
         Category::Unsupported => {
             if presence == Presence::Absent {
@@ -515,7 +584,7 @@ pub fn list_rows(
     db.object_names(include_measurements)
         .into_iter()
         .filter_map(|(name, kind)| db.plan(&name, kind))
-        .map(|plan| row_for(src, &plan))
+        .map(|plan| row_for(db, src, &plan))
         .collect()
 }
 

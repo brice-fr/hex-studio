@@ -17,6 +17,7 @@ pub mod convert;
 pub mod db;
 pub mod decode;
 pub mod encode;
+pub mod formula;
 pub mod layout;
 pub mod model;
 pub mod stats;

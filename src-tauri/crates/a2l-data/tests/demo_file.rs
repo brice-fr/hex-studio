@@ -119,7 +119,7 @@ fn identical_ubyte_scalar_equals_the_raw_byte() {
     assert_eq!(plan.byte_size(), 1);
 
     let byte = img.read(0x810000, 1).expect("byte present")[0];
-    let row = decode::row_for(&img, &plan);
+    let row = decode::row_for(&db, &img, &plan);
     assert_eq!(row.presence, Presence::Full);
     assert_eq!(row.display, byte.to_string());
     assert_eq!(row.phys_num, Some(f64::from(byte)));
@@ -397,7 +397,7 @@ fn ascii_string_decodes_with_its_capacity() {
     assert_eq!(plan.category, Category::Ascii);
     assert_eq!(plan.byte_size(), 42, "NUMBER 42 characters of UBYTE");
 
-    let row = decode::row_for(&img, &plan);
+    let row = decode::row_for(&db, &img, &plan);
     assert_eq!(row.text_value.as_deref(), Some("ASAM Test"));
     assert_eq!(row.text_capacity, Some(42));
     // Padded with NULs, so a byte stays reserved for the terminator.
@@ -419,6 +419,117 @@ fn ascii_string_decodes_with_its_capacity() {
     assert_eq!(detail.value_unit, "", "nor in the parameter pane");
 }
 
+/// The virtual parameters now evaluate rather than showing their formula.
+///
+/// The chain is worth spelling out, because it exercises every part of the
+/// evaluator at once: SCALAR.UBYTE.IDENTICAL holds 20, so
+/// `X1 + sysc(System_Constant_1)` is 20 + (-3.45) = 16.55, and REF_3 reads two
+/// other computed parameters rather than stored bytes.
+#[test]
+fn virtual_parameters_evaluate_their_formulas() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let val = |n: &str| {
+        rows.iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("{n} missing"))
+            .phys_num
+            .unwrap_or_else(|| panic!("{n} did not evaluate"))
+    };
+
+    // X1 = SCALAR.SBYTE.IDENTICAL = 6, formula "X1 - 9".
+    assert_eq!(val("ASAM.C.VIRTUAL.REF_1.SWORD"), -3.0);
+    // X1 = SCALAR.UBYTE.IDENTICAL = 20, formula "X1 + 19".
+    assert_eq!(val("ASAM.C.VIRTUAL.REF_2.UWORD"), 39.0);
+    // "X1 + X2" over the two above: a virtual reading virtuals.
+    assert_eq!(val("ASAM.C.VIRTUAL.REF_3.SWORD"), 36.0);
+    // "X1 + sysc(System_Constant_1)" with the constant at -3.45.
+    let sysc = val("ASAM.C.VIRTUAL.SYSTEM_CONSTANT_1");
+    assert!((sysc - 16.55).abs() < 1e-9, "got {sysc}");
+}
+
+/// The strongest available check on the evaluator: DEPENDENT_CHARACTERISTICs
+/// carry the same formulas but *are* stored, so recomputing one and comparing
+/// against the bytes in the image validates the whole chain against ground
+/// truth rather than against my own expectations.
+#[test]
+fn dependent_characteristics_match_their_stored_values() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let stored = |n: &str| {
+        rows.iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("{n} missing"))
+            .phys_num
+            .unwrap_or_else(|| panic!("{n} has no stored value"))
+    };
+    let constants = db.system_constants();
+    let eval = |src: &str, vars: &[f64]| {
+        a2l_data::formula::Formula::parse(src)
+            .expect("parse")
+            .eval(&a2l_data::formula::Context { vars, constants })
+            .expect("eval")
+    };
+
+    let sbyte = stored("ASAM.C.SCALAR.SBYTE.IDENTICAL"); // 6
+    let ubyte = stored("ASAM.C.SCALAR.UBYTE.IDENTICAL"); // 20
+
+    // REF_1 = X1 + 5 over the SBYTE scalar.
+    let r1 = eval("X1 + 5", &[sbyte]);
+    assert_eq!(r1, stored("ASAM.C.DEPENDENT.REF_1.SWORD"));
+
+    // REF_2 = X1 + 25 over the UBYTE scalar.
+    let r2 = eval("X1 + 25", &[ubyte]);
+    assert_eq!(r2, stored("ASAM.C.DEPENDENT.REF_2.UWORD"));
+
+    // REF_3 = X1 + X2 over the two above.
+    assert_eq!(eval("X1 + X2", &[r1, r2]), stored("ASAM.C.DEPENDENT.REF_3.SWORD"));
+
+    // REF_4 exercises a system constant.
+    let r4 = eval("X1 + sysc(System_Constant_1)", &[r1]);
+    assert!(
+        (r4 - stored("ASAM.C.DEPENDENT.REF_4.FLOAT64_IEEE")).abs() < 1e-9,
+        "computed {r4}"
+    );
+
+    // REF_5 reads a *virtual* parameter, so this closes the loop between the
+    // two formula paths: 20 + (-3.45) = 16.55, doubled is 33.1.
+    let virt = stored("ASAM.C.VIRTUAL.SYSTEM_CONSTANT_1");
+    let r5 = eval("X1 * 2", &[virt]);
+    assert!(
+        (r5 - stored("ASAM.C.DEPENDENT.REF_5.FLOAT64_IEEE")).abs() < 1e-9,
+        "computed {r5} from virtual {virt}"
+    );
+}
+
+/// A FORM conversion is now evaluated, and inverts only when FORMULA_INV says how.
+#[test]
+fn form_conversions_evaluate_and_invert() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let row = rows
+        .iter()
+        .find(|r| r.name == "ASAM.C.SCALAR.SWORD.FORM_X_PLUS_4")
+        .expect("FORM scalar present");
+
+    // CM.FORM.X_PLUS_4 is "X1+4" over the stored SWORD, which holds 2.
+    assert_eq!(row.conversion_type, "FORM");
+    assert_eq!(row.phys_num, Some(6.0), "no longer unevaluated");
+    assert!(row.editable, "FORMULA_INV 'X1-4' makes it writable");
+
+    // The inverse must round-trip: asking for 6 must store the raw 2 again.
+    let w = a2l_data::encode::encode_scalar(&db, &img, &row.name, 6.0).expect("encode");
+    assert_eq!(w.raw, 2.0, "FORMULA_INV inverts the forward expression");
+
+    // CM.VIRTUAL.EXTERNAL_VALUE is "4*X1" with no FORMULA_INV, so it displays
+    // but cannot be written.
+    let conv = db.conversion_for("CM.VIRTUAL.EXTERNAL_VALUE");
+    assert!(
+        !conv.conversion.is_invertible(),
+        "without FORMULA_INV there is no way back"
+    );
+}
+
 /// A rescale axis uses NO_RESCALE_X / RESERVED / AXIS_RESCALE_X, none of which
 /// the resolver originally understood. Every field was skipped, the extent came
 /// out zero, and the object was reported as missing from the image even though
@@ -435,7 +546,7 @@ fn rescale_axis_resolves_its_layout_and_pairs() {
     // 1 count byte + 1 RESERVED pad + 5 pairs of UBYTE.
     assert_eq!(plan.byte_size(), 12);
 
-    let row = decode::row_for(&img, &plan);
+    let row = decode::row_for(&db, &img, &plan);
     assert_eq!(
         row.presence,
         Presence::Full,

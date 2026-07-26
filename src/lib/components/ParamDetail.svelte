@@ -247,9 +247,13 @@
           <button class="apply" onclick={commit}>Apply</button>
         {/if}
       {:else}
+        <div class="value-static" class:out={outLimit}>
+          <span class="v">{atPrecision(row.phys_num, row.display)}</span>
+          {#if row.unit}<span class="unit">{row.unit}</span>{/if}
+        </div>
         {#if isVirtual}
-          <!-- Computed from other parameters, so there is no stored value to
-               show — the formula and its inputs are the useful content. -->
+          <!-- The value above is computed, so show what produced it and let
+               the reader follow each input. -->
           <div class="formula">{row.formula ?? 'computed'}</div>
           {#if row.depends_on?.length}
             <div class="deps">
@@ -260,11 +264,6 @@
               {/each}
             </div>
           {/if}
-        {:else}
-          <div class="value-static" class:out={outLimit}>
-            <span class="v">{atPrecision(row.phys_num, row.display)}</span>
-            {#if row.unit}<span class="unit">{row.unit}</span>{/if}
-          </div>
         {/if}
         {#if row.note}
           <div class="note">{row.note}</div>

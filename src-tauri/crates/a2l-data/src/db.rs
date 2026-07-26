@@ -157,6 +157,9 @@ pub struct A2lDatabase {
     module_index: usize,
     aligns: Alignments,
     default_endian: Endian,
+    /// MOD_PAR SYSTEM_CONSTANTs that parse as numbers. Textual ones are
+    /// omitted, so a formula referring to one fails rather than reading zero.
+    system_constants: std::collections::HashMap<String, f64>,
     summary: A2lSummary,
 }
 
@@ -199,17 +202,38 @@ impl A2lDatabase {
             warnings,
         };
 
+        let system_constants = module
+            .mod_par
+            .as_ref()
+            .map(|mp| {
+                mp.system_constant
+                    .iter()
+                    .filter_map(|sc| {
+                        let name = system_constant_name(sc)?;
+                        let value = sc.value.trim().parse::<f64>().ok()?;
+                        Some((name, value))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(A2lDatabase {
             file,
             module_index: 0,
             aligns,
             default_endian,
+            system_constants,
             summary,
         })
     }
 
     pub fn summary(&self) -> &A2lSummary {
         &self.summary
+    }
+
+    /// Numeric SYSTEM_CONSTANTs, for `sysc()` references in formulas.
+    pub fn system_constants(&self) -> &std::collections::HashMap<String, f64> {
+        &self.system_constants
     }
 
     pub fn module(&self) -> &Module {
@@ -316,7 +340,25 @@ impl A2lDatabase {
             }
 
             ConversionType::Form => {
-                Conversion::Unsupported("FORM formulas are not evaluated".into())
+                let Some(f) = &cm.formula else {
+                    return Conversion::Unsupported("FORM without a FORMULA block".into());
+                };
+                let forward = match crate::formula::Formula::parse(&f.fx) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => return Conversion::Unsupported(format!("formula: {e}")),
+                };
+                // FORMULA_INV is optional; without it the conversion is
+                // display-only, which `is_invertible` reports.
+                let inverse = f
+                    .formula_inv
+                    .as_ref()
+                    .and_then(|i| crate::formula::Formula::parse(&i.gx).ok())
+                    .map(Box::new);
+                Conversion::Form {
+                    forward,
+                    inverse,
+                    constants: self.system_constants.clone(),
+                }
             }
         }
     }
@@ -581,6 +623,21 @@ impl A2lDatabase {
     }
 }
 
+/// The name of a SYSTEM_CONSTANT.
+///
+/// a2lfile 3.5 keeps `SystemConstant::name` crate-private and implements
+/// neither `A2lObjectName` nor a getter for it, so its `Debug` output is the
+/// only public route to the name. The parse below is deliberately narrow, and
+/// `system_constant_name_survives_debug_format` fails loudly if a future
+/// a2lfile changes that formatting — without it, every `sysc()` reference would
+/// quietly stop resolving.
+fn system_constant_name(sc: &a2lfile::SystemConstant) -> Option<String> {
+    let rendered = format!("{sc:?}");
+    let after = rendered.split("name: \"").nth(1)?;
+    let name = after.split('"').next()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// The shared AXIS_PTS object an axis descriptor points at.
 fn axis_pts_ref(descr: &a2lfile::AxisDescr) -> AxisSource {
     descr
@@ -681,6 +738,23 @@ fn characteristic_point_count(ch: &Characteristic, category: Category) -> u32 {
         }
     }
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards the Debug-based workaround in `system_constant_name`.
+    #[test]
+    fn system_constant_name_survives_debug_format() {
+        let sc = a2lfile::SystemConstant::new("System_Constant_1".into(), "-3.45".into());
+        assert_eq!(
+            system_constant_name(&sc).as_deref(),
+            Some("System_Constant_1"),
+            "a2lfile's Debug output for SystemConstant changed shape; the name \
+             can no longer be recovered and every sysc() reference would break"
+        );
+    }
 }
 
 fn conversion_type_name(t: ConversionType) -> &'static str {

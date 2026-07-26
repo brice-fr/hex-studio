@@ -58,6 +58,13 @@ pub enum Conversion {
         ranges: Vec<(f64, f64, String)>,
         default: Option<String>,
     },
+    /// FORM: an expression over `X1`, the raw value. Inverting needs the
+    /// separate FORMULA_INV, since the forward expression cannot be solved.
+    Form {
+        forward: Box<crate::formula::Formula>,
+        inverse: Option<Box<crate::formula::Formula>>,
+        constants: std::collections::HashMap<String, f64>,
+    },
     /// Recognised but not implemented — FORM, or a RAT_FUNC we refuse to guess at.
     Unsupported(String),
 }
@@ -154,6 +161,16 @@ impl Conversion {
                 }
             }
 
+            Conversion::Form {
+                forward, constants, ..
+            } => match forward.eval(&crate::formula::Context {
+                vars: &[raw],
+                constants,
+            }) {
+                Ok(v) => Phys::Num(v),
+                Err(e) => Phys::Unavailable(e),
+            },
+
             Conversion::Unsupported(reason) => Phys::Unavailable(reason.clone()),
         }
     }
@@ -223,6 +240,18 @@ impl Conversion {
             // A verbal value is not a number; use `text_to_raw`.
             Conversion::Verb { .. } | Conversion::VerbRange { .. } => None,
 
+            // Only FORMULA_INV can invert a FORM; the forward expression is
+            // not solvable in general.
+            Conversion::Form {
+                inverse, constants, ..
+            } => inverse.as_ref().and_then(|inv| {
+                inv.eval(&crate::formula::Context {
+                    vars: &[phys],
+                    constants,
+                })
+                .ok()
+            }),
+
             Conversion::Unsupported(_) => None,
         }
     }
@@ -252,6 +281,7 @@ impl Conversion {
             Conversion::Tab { pairs, .. } => table_monotonic_dir(pairs).is_some(),
             Conversion::Verb { pairs, .. } => !pairs.is_empty(),
             Conversion::VerbRange { ranges, .. } => !ranges.is_empty(),
+            Conversion::Form { inverse, .. } => inverse.is_some(),
             Conversion::Unsupported(_) => false,
         }
     }
