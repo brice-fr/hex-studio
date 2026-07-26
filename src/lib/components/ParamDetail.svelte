@@ -75,16 +75,24 @@
     isText && row?.text_max_len != null ? row.text_max_len - draft.length : 0
   );
   /**
-   * A slider only makes sense for a numeric scalar with a real range and a
-   * meaningful increment. An absurdly fine range would need millions of steps
-   * to cross and is better served by typing.
+   * A slider needs a numeric scalar, a real range, and a step the field can
+   * actually store.
+   *
+   * Deliberately no cap on the number of increments. A ULONG spanning three
+   * million counts is exactly the case a slider helps with — the track gives
+   * coarse reach across the range, the text field gives precision, and arrow
+   * keys move exactly one step. Capping the count only denied a slider to the
+   * widest integer parameters, which are the ones most tedious to type.
+   *
+   * The pathological range needs no guard here: a span beyond about 1.8e308
+   * overflows to infinity, so the backend reports no step and this returns
+   * false on the `Number.isFinite` check below.
    */
   const showSlider = $derived.by(() => {
     if (!row?.editable || isEnum || isText) return false;
     const lo = row.lower_limit, hi = row.upper_limit, step = row.phys_step;
     if (![lo, hi, step].every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
-    if (hi <= lo || step <= 0) return false;
-    return (hi - lo) / step <= 1e6;
+    return hi > lo && step > 0;
   });
 
   /** Slider position, clamped — a stored value may sit outside the limits. */

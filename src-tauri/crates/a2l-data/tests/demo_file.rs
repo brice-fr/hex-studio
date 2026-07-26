@@ -469,3 +469,4 @@ fn scalar_edits_round_trip_through_the_image() {
     }
     assert!(checked > 10, "expected many editable scalars, saw {checked}");
 }
+
