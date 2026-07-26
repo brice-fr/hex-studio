@@ -97,6 +97,9 @@ pub struct ParamRow {
     pub display: String,
     /// Numeric physical value when the value is numeric — the edit field's source.
     pub phys_num: Option<f64>,
+    /// Physical increment of one raw LSB, so a slider can only land on values
+    /// the field is actually able to store. `None` when no sensible step exists.
+    pub phys_step: Option<f64>,
     /// For 1D objects, the numeric extent behind the summary in `display`.
     /// Exposed separately so the frontend can re-render at a different decimal
     /// precision without a full re-decode.

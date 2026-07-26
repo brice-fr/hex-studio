@@ -74,6 +74,27 @@
   const textLeft = $derived(
     isText && row?.text_max_len != null ? row.text_max_len - draft.length : 0
   );
+  /**
+   * A slider only makes sense for a numeric scalar with a real range and a
+   * meaningful increment. An absurdly fine range would need millions of steps
+   * to cross and is better served by typing.
+   */
+  const showSlider = $derived.by(() => {
+    if (!row?.editable || isEnum || isText) return false;
+    const lo = row.lower_limit, hi = row.upper_limit, step = row.phys_step;
+    if (![lo, hi, step].every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
+    if (hi <= lo || step <= 0) return false;
+    return (hi - lo) / step <= 1e6;
+  });
+
+  /** Slider position, clamped — a stored value may sit outside the limits. */
+  const sliderValue = $derived.by(() => {
+    if (!row) return 0;
+    const v = Number(draft);
+    if (!Number.isFinite(v)) return row.lower_limit;
+    return Math.min(row.upper_limit, Math.max(row.lower_limit, v));
+  });
+
   const outLimit = $derived.by(() => {
     if (!row || row.phys_num === null || row.phys_num === undefined) return false;
     return row.phys_num < row.lower_limit || row.phys_num > row.upper_limit;
@@ -182,6 +203,27 @@
             {#if row.unit}<span class="unit">{row.unit}</span>{/if}
           {/if}
         </div>
+
+        {#if showSlider}
+          <!-- Dragging updates the field live but only writes on release, so a
+               sweep leaves one undo entry rather than one per pixel. -->
+          <input
+            type="range"
+            class="slider"
+            min={row.lower_limit}
+            max={row.upper_limit}
+            step={row.phys_step}
+            value={sliderValue}
+            aria-label="{row.name} value"
+            oninput={(e) => { draft = e.currentTarget.value; error = ''; }}
+            onchange={commit}
+          />
+          <div class="slider-ends">
+            <span>{row.lower_limit}</span>
+            <span>{row.upper_limit}</span>
+          </div>
+        {/if}
+
         {#if error}
           <div class="err">{error}</div>
         {:else if isText}
@@ -404,6 +446,28 @@
   input.invalid { border-color: var(--c-err); }
 
   .unit { color: var(--c-muted); font-size: 11px; flex-shrink: 0; }
+
+  /* ── Range slider ── */
+  .slider {
+    width: 100%;
+    margin: 8px 0 0;
+    padding: 0;
+    accent-color: var(--c-accent);
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    /* The shared input rule right-aligns text; irrelevant here but the border
+       and padding are not, so they are cleared explicitly. */
+  }
+
+  .slider-ends {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1px;
+    font-size: 10px;
+    color: var(--c-dim);
+    font-variant-numeric: tabular-nums;
+  }
 
   .apply {
     margin-top: 6px;

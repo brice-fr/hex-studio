@@ -187,6 +187,36 @@ fn hex_of_capped(bytes: &[u8], max: usize) -> String {
     format!("{} …", hex_of(&bytes[..max]))
 }
 
+/// The physical increment of one raw LSB, used to step a slider so it can only
+/// land on values the field is able to store.
+///
+/// Integer fields have a real LSB, so the step is the physical distance between
+/// two adjacent raw values — 1 for an IDENTICAL byte, 0.1 for a RAT_FUNC that
+/// divides by ten. Floats have no meaningful LSB at this scale, and neither do
+/// conversions that fail or flatten, so the declared range is subdivided instead.
+fn phys_step_for(plan: &ObjectPlan, raw: f64, dt: DataType) -> Option<f64> {
+    let span = plan.upper_limit - plan.lower_limit;
+    let fallback = (span.is_finite() && span > 0.0).then(|| span / 1000.0);
+
+    if layout::is_float(dt) {
+        return fallback;
+    }
+    match (
+        plan.conv.conversion.to_phys(raw),
+        plan.conv.conversion.to_phys(raw + 1.0),
+    ) {
+        (Phys::Num(a), Phys::Num(b)) => {
+            let step = (b - a).abs();
+            if step.is_finite() && step > 0.0 {
+                Some(step)
+            } else {
+                fallback
+            }
+        }
+        _ => fallback,
+    }
+}
+
 /// What a fixed-width character array holds.
 struct AsciiField {
     /// Text up to the first NUL, with non-printable bytes shown as `.`.
@@ -257,6 +287,7 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
     let mut raw_hex = None;
     let mut display = String::from("—");
     let mut phys_num = None;
+    let mut phys_step = None;
     let mut phys_min = None;
     let mut phys_max = None;
     let mut point_count = None;
@@ -277,6 +308,7 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
                             Phys::Num(v) => {
                                 display = format_number(v, &fmt);
                                 phys_num = Some(v);
+                                phys_step = phys_step_for(plan, raw, field.datatype);
                             }
                             Phys::Text(t) => display = t,
                             Phys::Unavailable(_) => display = "—".into(),
@@ -395,6 +427,7 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
         raw_hex,
         display,
         phys_num,
+        phys_step,
         phys_min,
         phys_max,
         enum_options: plan.conv.conversion.enum_options(),

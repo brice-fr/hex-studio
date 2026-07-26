@@ -257,6 +257,57 @@ fn coverage_statistics_are_self_consistent() {
     assert!(s.present_full > 0, "demo image should contain real parameters");
 }
 
+/// The slider step must be the physical distance one raw LSB covers, so
+/// dragging can only reach values the field can actually store.
+#[test]
+fn slider_step_follows_the_conversion() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let find = |n: &str| {
+        rows.iter()
+            .find(|r| r.name == n)
+            .unwrap_or_else(|| panic!("{n} missing"))
+    };
+
+    let approx = |got: Option<f64>, want: f64, what: &str| {
+        let g = got.unwrap_or_else(|| panic!("{what}: no step"));
+        assert!(
+            (g - want).abs() < 1e-9,
+            "{what}: step {g}, expected {want}"
+        );
+    };
+
+    // IDENTICAL on a byte: one raw count is one physical unit.
+    approx(
+        find("ASAM.C.SCALAR.UBYTE.IDENTICAL").phys_step,
+        1.0,
+        "IDENTICAL",
+    );
+    // LINEAR with a = 2: one raw count is two physical units.
+    approx(
+        find("ASAM.C.SCALAR.SWORD.LINEAR_MUL_2").phys_step,
+        2.0,
+        "LINEAR a=2",
+    );
+    // RAT_FUNC dividing by ten: one raw count is a tenth of a unit.
+    approx(
+        find("ASAM.C.SCALAR.SWORD.RAT_FUNC_DIV_10").phys_step,
+        0.1,
+        "RAT_FUNC /10",
+    );
+
+    // Every editable numeric row needs a usable step, or its slider is dead.
+    for row in rows.iter().filter(|r| r.editable && r.phys_num.is_some()) {
+        let step = row.phys_step.unwrap_or_else(|| panic!("{}: no step", row.name));
+        assert!(step > 0.0 && step.is_finite(), "{}: step {step}", row.name);
+        assert!(
+            row.upper_limit > row.lower_limit,
+            "{}: limits are not a usable range",
+            row.name
+        );
+    }
+}
+
 /// COM_AXIS and RES_AXIS defer to a shared AXIS_PTS object via AXIS_PTS_REF.
 #[test]
 fn com_axis_curve_reports_its_shared_axis() {
