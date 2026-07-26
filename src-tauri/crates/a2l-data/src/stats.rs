@@ -54,6 +54,7 @@ pub fn compute(
         match plan.category {
             Category::Scalar => s.scalars += 1,
             Category::Curve => s.curves += 1,
+            Category::Ascii => s.strings += 1,
             Category::Unsupported => s.unsupported += 1,
         }
         match presence_of(src, &plan) {

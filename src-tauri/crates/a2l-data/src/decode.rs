@@ -178,6 +178,55 @@ fn hex_of(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+/// Same, but elided after `max` bytes — a 42-character string would otherwise
+/// produce a wall of hex in the detail pane.
+fn hex_of_capped(bytes: &[u8], max: usize) -> String {
+    if bytes.len() <= max {
+        return hex_of(bytes);
+    }
+    format!("{} …", hex_of(&bytes[..max]))
+}
+
+/// What a fixed-width character array holds.
+struct AsciiField {
+    /// Text up to the first NUL, with non-printable bytes shown as `.`.
+    text: String,
+    /// Total bytes of the array.
+    capacity: u32,
+    /// Longest string the field accepts.
+    max_len: u32,
+    /// False when the text contains bytes outside printable ASCII, in which
+    /// case editing would silently rewrite them and is refused.
+    printable: bool,
+}
+
+fn decode_ascii(bytes: &[u8]) -> AsciiField {
+    let capacity = bytes.len() as u32;
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    let used = &bytes[..end];
+    let printable = used.iter().all(|b| (0x20..0x7F).contains(b));
+    let text = used
+        .iter()
+        .map(|b| if (0x20..0x7F).contains(b) { *b as char } else { '.' })
+        .collect();
+
+    // A NUL anywhere in the array means it is being used as a C string, so one
+    // byte stays reserved for the terminator. An array with no NUL at all is a
+    // fixed-width field that may be filled edge to edge.
+    let max_len = if bytes.contains(&0) {
+        capacity.saturating_sub(1)
+    } else {
+        capacity
+    };
+
+    AsciiField {
+        text,
+        capacity,
+        max_len,
+        printable,
+    }
+}
+
 /// The point count actually in use: the stored count when the layout has one,
 /// clamped to the allocation.
 fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
@@ -208,7 +257,13 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
     let mut raw_hex = None;
     let mut display = String::from("—");
     let mut phys_num = None;
+    let mut phys_min = None;
+    let mut phys_max = None;
     let mut point_count = None;
+    let mut text_value = None;
+    let mut text_capacity = None;
+    let mut text_max_len = None;
+    let mut ascii_printable = false;
 
     match plan.category {
         Category::Scalar => {
@@ -251,6 +306,8 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
                 } else {
                     let lo = phys.iter().cloned().fold(f64::INFINITY, f64::min);
                     let hi = phys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    phys_min = Some(lo);
+                    phys_max = Some(hi);
                     display = format!(
                         "{} … {}",
                         format_number(lo, &fmt),
@@ -264,6 +321,28 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
             }
         }
 
+        Category::Ascii => {
+            if let (Some(bytes), Some(field)) = (&bytes, plan.layout.fnc) {
+                let from = field.offset as usize;
+                let len = field.size() as usize;
+                if let Some(slice) = bytes.get(from..from + len) {
+                    raw_hex = Some(hex_of_capped(slice, 12));
+                    let ascii = decode_ascii(slice);
+                    display = if ascii.text.is_empty() {
+                        "(empty)".into()
+                    } else {
+                        ascii.text.clone()
+                    };
+                    text_value = Some(ascii.text);
+                    text_capacity = Some(ascii.capacity);
+                    text_max_len = Some(ascii.max_len);
+                    ascii_printable = ascii.printable;
+                }
+            } else if presence == Presence::Absent {
+                display = "absent".into();
+            }
+        }
+
         Category::Unsupported => {
             if presence == Presence::Absent {
                 display = "absent".into();
@@ -271,20 +350,28 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
         }
     }
 
-    // Editing needs an invertible conversion, a scalar shape, and real bytes.
-    let editable = plan.category == Category::Scalar
-        && presence == Presence::Full
-        && plan.conv.conversion.is_invertible()
-        && plan.kind != ObjKind::Measurement;
+    // Editing always needs real bytes; what else it needs depends on the shape.
+    let editable = presence == Presence::Full
+        && plan.kind != ObjKind::Measurement
+        && match plan.category {
+            Category::Scalar => plan.conv.conversion.is_invertible(),
+            Category::Ascii => ascii_printable,
+            _ => false,
+        };
 
     let note = plan.note.clone().or_else(|| {
-        if plan.category == Category::Scalar
-            && presence == Presence::Full
-            && !plan.conv.conversion.is_invertible()
-        {
-            Some("conversion is not invertible — read only".to_string())
-        } else {
-            None
+        if presence != Presence::Full {
+            return None;
+        }
+        match plan.category {
+            Category::Scalar if !plan.conv.conversion.is_invertible() => {
+                Some("conversion is not invertible — read only".to_string())
+            }
+            // Rewriting bytes we had to render as '.' would destroy them.
+            Category::Ascii if !ascii_printable => {
+                Some("contains non-printable bytes — read only".to_string())
+            }
+            _ => None,
         }
     });
 
@@ -308,7 +395,12 @@ pub fn row_for(src: &dyn ByteSource, plan: &ObjectPlan) -> ParamRow {
         raw_hex,
         display,
         phys_num,
+        phys_min,
+        phys_max,
         enum_options: plan.conv.conversion.enum_options(),
+        text_value,
+        text_capacity,
+        text_max_len,
         point_count,
         lower_limit: plan.lower_limit,
         upper_limit: plan.upper_limit,
@@ -530,6 +622,55 @@ mod tests {
         assert_eq!(format_number(1.0, "%3.0"), "1");
         assert_eq!(format_number(20.0, ""), "20");
         assert_eq!(format_number(1.25, ""), "1.25");
+    }
+
+    #[test]
+    fn ascii_reads_up_to_the_first_nul() {
+        // "Hi" then padding, as the demo file stores its strings.
+        let a = decode_ascii(&[b'H', b'i', 0, 0, 0, 0]);
+        assert_eq!(a.text, "Hi");
+        assert_eq!(a.capacity, 6);
+        assert!(a.printable);
+    }
+
+    /// A NUL anywhere means the array is a C string, so a byte is reserved.
+    #[test]
+    fn ascii_reserves_a_byte_when_nul_terminated() {
+        let a = decode_ascii(&[b'H', b'i', 0, 0]);
+        assert_eq!(a.capacity, 4);
+        assert_eq!(a.max_len, 3, "one byte kept for the terminator");
+    }
+
+    /// With no NUL at all the array is a fixed-width field and may be filled.
+    #[test]
+    fn ascii_allows_the_full_width_when_not_terminated() {
+        let a = decode_ascii(&[b'A', b'B', b'C', b'D']);
+        assert_eq!(a.text, "ABCD");
+        assert_eq!(a.capacity, 4);
+        assert_eq!(a.max_len, 4, "no terminator in use, so no byte reserved");
+    }
+
+    #[test]
+    fn ascii_all_nuls_is_an_empty_string() {
+        let a = decode_ascii(&[0, 0, 0]);
+        assert_eq!(a.text, "");
+        assert_eq!(a.max_len, 2);
+        assert!(a.printable);
+    }
+
+    #[test]
+    fn ascii_flags_non_printable_content() {
+        // A control byte before the NUL cannot be round-tripped through a text
+        // field, so the row must be reported as non-printable.
+        let a = decode_ascii(&[b'A', 0x07, b'B', 0]);
+        assert!(!a.printable);
+        assert_eq!(a.text, "A.B", "shown with a placeholder");
+    }
+
+    #[test]
+    fn hex_is_elided_past_the_cap() {
+        assert_eq!(hex_of_capped(&[1, 2], 4), "01 02");
+        assert_eq!(hex_of_capped(&[1, 2, 3, 4, 5], 3), "01 02 03 …");
     }
 
     #[test]

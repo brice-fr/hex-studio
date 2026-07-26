@@ -8,10 +8,16 @@
     bytesPerRow = 16,
     theme       = 'system',
     showMeasurements = false,
+    showColAddress = false,
+    showColType    = true,
+    showColRaw     = false,
     onFontSize    = (_n) => {},
     onBytesPerRow = (_n) => {},
     onTheme       = (_t) => {},
     onShowMeasurements = (_v) => {},
+    onShowColAddress   = (_v) => {},
+    onShowColType      = (_v) => {},
+    onShowColRaw       = (_v) => {},
     onClose       = () => {},
   } = $props();
 
@@ -110,6 +116,29 @@
                     onclick={() => onShowMeasurements(false)}>Off</button>
             <button class="seg-btn" class:active={showMeasurements}
                     onclick={() => onShowMeasurements(true)}>On</button>
+          </div>
+        </div>
+
+        <div class="pref-row col-row">
+          <span class="pref-label">
+            Table columns
+            <span class="pref-hint">Hidden columns stay visible in the parameter pane</span>
+          </span>
+          <div class="checks">
+            {#each [
+              { label: 'Address', on: showColAddress, set: onShowColAddress },
+              { label: 'Type',    on: showColType,    set: onShowColType },
+              { label: 'Raw',     on: showColRaw,     set: onShowColRaw },
+            ] as col}
+              <label class="check">
+                <input
+                  type="checkbox"
+                  checked={col.on}
+                  onchange={(e) => col.set(e.currentTarget.checked)}
+                />
+                <span>{col.label}</span>
+              </label>
+            {/each}
           </div>
         </div>
       </div>
@@ -215,6 +244,32 @@
     color: var(--c-dim);
     line-height: 1.35;
     max-width: 190px;
+  }
+
+  /* Independent toggles, so checkboxes rather than three On/Off pairs. */
+  .col-row { align-items: flex-start; }
+
+  .checks {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-top: 1px;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--c-text2);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .check input {
+    accent-color: var(--c-accent);
+    cursor: pointer;
+    margin: 0;
   }
 
   .segmented {

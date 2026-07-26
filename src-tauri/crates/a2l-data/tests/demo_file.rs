@@ -208,13 +208,21 @@ fn every_row_is_classified_and_sized_consistently() {
         if row.category == Category::Scalar && row.presence == Presence::Full {
             assert!(row.raw_hex.is_some(), "{} lacks raw bytes", row.name);
         }
-        // Editability implies an invertible conversion produced a number.
+        // Editability implies there is something concrete to edit: a number, an
+        // enum to pick from, or string content.
         if row.editable {
             assert!(
-                row.phys_num.is_some() || row.enum_options.is_some(),
+                row.phys_num.is_some() || row.enum_options.is_some() || row.text_value.is_some(),
                 "{} is editable but has no value to edit",
                 row.name
             );
+        }
+        // An ASCII row must always report the limit the editor has to enforce.
+        if row.category == Category::Ascii && row.presence == Presence::Full {
+            let cap = row.text_capacity.expect("capacity");
+            let max = row.text_max_len.expect("max length");
+            assert!(max <= cap, "{}: max {max} exceeds capacity {cap}", row.name);
+            assert_eq!(cap, row.byte_size, "{}: capacity is the byte extent", row.name);
         }
     }
 }
@@ -225,7 +233,11 @@ fn coverage_statistics_are_self_consistent() {
     let s = stats::compute(&db, &img, false);
 
     assert_eq!(s.total_objects, 89);
-    assert_eq!(s.scalars + s.curves + s.unsupported, s.total_objects);
+    assert_eq!(
+        s.scalars + s.curves + s.strings + s.unsupported,
+        s.total_objects
+    );
+    assert!(s.strings > 0, "the demo file declares an ASCII string");
     assert_eq!(s.present_full + s.present_partial + s.absent, s.total_objects);
 
     assert_eq!(s.image_bytes, img.total_bytes());
@@ -243,6 +255,69 @@ fn coverage_statistics_are_self_consistent() {
         s.coverage_pct
     );
     assert!(s.present_full > 0, "demo image should contain real parameters");
+}
+
+/// The demo file's ASCII characteristic is a 42-byte array holding
+/// "ASAM Test" followed by NUL padding.
+#[test]
+fn ascii_string_decodes_with_its_capacity() {
+    let Some((db, img)) = open_demo() else { return };
+    let plan = db
+        .plan_characteristic("ASAM.C.ASCII.UBYTE.NUMBER_42")
+        .expect("ASCII characteristic present");
+    assert_eq!(plan.address, 0x810200);
+    assert_eq!(plan.category, Category::Ascii);
+    assert_eq!(plan.byte_size(), 42, "NUMBER 42 characters of UBYTE");
+
+    let row = decode::row_for(&img, &plan);
+    assert_eq!(row.text_value.as_deref(), Some("ASAM Test"));
+    assert_eq!(row.text_capacity, Some(42));
+    // Padded with NULs, so a byte stays reserved for the terminator.
+    assert_eq!(row.text_max_len, Some(41));
+    assert_eq!(row.display, "ASAM Test");
+    assert!(row.editable, "printable content should be editable");
+}
+
+/// Writing must rewrite the whole array, not just the new characters, or the
+/// tail of a longer previous string survives.
+#[test]
+fn ascii_write_clears_the_rest_of_the_array() {
+    let Some((db, _)) = open_demo() else { return };
+    let w = a2l_data::encode::encode_ascii(&db, "ASAM.C.ASCII.UBYTE.NUMBER_42", "Hi")
+        .expect("should encode");
+
+    assert_eq!(w.address, 0x810200);
+    assert_eq!(w.bytes.len(), 42, "the full array is rewritten");
+    assert_eq!(&w.bytes[..2], b"Hi");
+    assert!(
+        w.bytes[2..].iter().all(|b| *b == 0),
+        "everything past the new string must be cleared, leaving no residue \
+         of the previous 'ASAM Test'"
+    );
+}
+
+#[test]
+fn ascii_write_rejects_overlong_and_non_printable_input() {
+    let Some((db, _)) = open_demo() else { return };
+    let name = "ASAM.C.ASCII.UBYTE.NUMBER_42";
+
+    // 42 fits the array exactly; 43 does not.
+    assert!(a2l_data::encode::encode_ascii(&db, name, &"x".repeat(42)).is_ok());
+    assert!(a2l_data::encode::encode_ascii(&db, name, &"x".repeat(43)).is_err());
+
+    assert!(a2l_data::encode::encode_ascii(&db, name, "tab\there").is_err());
+    assert!(a2l_data::encode::encode_ascii(&db, name, "café").is_err());
+}
+
+/// The generic text entry point must route an ASCII object to the ASCII
+/// encoder rather than the enum one.
+#[test]
+fn encode_text_routes_ascii_objects() {
+    let Some((db, _)) = open_demo() else { return };
+    let w = a2l_data::encode::encode_text(&db, "ASAM.C.ASCII.UBYTE.NUMBER_42", "Ok")
+        .expect("should route to the ASCII encoder");
+    assert_eq!(w.bytes.len(), 42);
+    assert_eq!(&w.bytes[..2], b"Ok");
 }
 
 /// Encoding a physical value must produce bytes that decode back to it.

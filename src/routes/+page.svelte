@@ -164,10 +164,20 @@
   let showFileAssoc = $state(false);
   let showMeasurements = $state(lsGet('showMeasurements', 'false') === 'true');
 
+  // Data-view columns. Address, type and raw are reference detail that the
+  // parameter pane always shows, so the table starts with type alone and the
+  // other two are opt-in.
+  let showColAddress = $state(lsGet('showColAddress', 'false') === 'true');
+  let showColType    = $state(lsGet('showColType',    'true')  === 'true');
+  let showColRaw     = $state(lsGet('showColRaw',     'false') === 'true');
+
   $effect(() => { lsSet('fontSize',    fontSize); });
   $effect(() => { lsSet('bytesPerRow', bytesPerRow); });
   $effect(() => { lsSet('theme',       theme); });
   $effect(() => { lsSet('showMeasurements', showMeasurements); });
+  $effect(() => { lsSet('showColAddress',   showColAddress); });
+  $effect(() => { lsSet('showColType',      showColType); });
+  $effect(() => { lsSet('showColRaw',       showColRaw); });
 
   $effect(() => {
     document.documentElement.setAttribute('data-theme', theme === 'system' ? '' : theme);
@@ -196,6 +206,10 @@
   // null, so Svelte would never track the dependency otherwise.
   $effect(() => { const v = showSegmentList;   segmentListMenuItem?.setChecked(v); });
   $effect(() => { const v = showDataInspector; dataInspectorMenuItem?.setChecked(v); });
+  // Greyed out in the data view rather than hidden: the checkmarks still show
+  // what the hex view will look like on return.
+  $effect(() => { const v = viewMode === 'hex'; segmentListMenuItem?.setEnabled(v); });
+  $effect(() => { const v = viewMode === 'hex'; dataInspectorMenuItem?.setEnabled(v); });
   $effect(() => { const v = records.length > 0; exportHtmlMenuItem?.setEnabled(v); });
   $effect(() => { const v = records.length > 0; compareMenuItem?.setEnabled(v); });
   $effect(() => { const v = a2lSummary !== null; a2lUnloadMenuItem?.setEnabled(v); });
@@ -1005,10 +1019,16 @@
   {bytesPerRow}
   {theme}
   {showMeasurements}
+  {showColAddress}
+  {showColType}
+  {showColRaw}
   onFontSize={(n) => { fontSize = n; }}
   onBytesPerRow={(n) => { bytesPerRow = n; }}
   onTheme={(t) => { theme = t; }}
   onShowMeasurements={(v) => { showMeasurements = v; }}
+  onShowColAddress={(v) => { showColAddress = v; }}
+  onShowColType={(v) => { showColType = v; }}
+  onShowColRaw={(v) => { showColRaw = v; }}
   onClose={() => { showPreferences = false; }}
 />
 
@@ -1128,6 +1148,9 @@
           selected={a2lSelected}
           loading={a2lDecoding}
           {fontSize}
+          showAddress={showColAddress}
+          showType={showColType}
+          showRaw={showColRaw}
           onSelect={handleA2lSelect}
           onEditValue={handleA2lEditValue}
           onEditText={handleA2lEditText}
@@ -1156,7 +1179,10 @@
       {/if}
     </main>
 
-    {#if showSegmentList || showDataInspector}
+    <!-- Both side panels describe the byte image, so they belong to the hex
+         view only. Their visibility state is left untouched here so switching
+         back restores the layout the user had. -->
+    {#if viewMode === 'hex' && (showSegmentList || showDataInspector)}
       <aside class="side-panel">
         {#if showSegmentList}
           <div class="side-section">

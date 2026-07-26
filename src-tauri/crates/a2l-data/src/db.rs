@@ -554,10 +554,7 @@ fn classify_characteristic(
         CharacteristicType::Value => (Category::Scalar, None),
         CharacteristicType::Curve => (Category::Curve, None),
         CharacteristicType::ValBlk => (Category::Curve, None),
-        CharacteristicType::Ascii => (
-            Category::Unsupported,
-            Some("ASCII strings are not decoded".to_string()),
-        ),
+        CharacteristicType::Ascii => (Category::Ascii, None),
         CharacteristicType::Map => (
             Category::Unsupported,
             Some("2D maps are not decoded yet".to_string()),

@@ -53,6 +53,8 @@ pub enum Category {
     Scalar,
     /// One-dimensional: curve, axis points, or value block.
     Curve,
+    /// A fixed-width character array (A2L `ASCII`).
+    Ascii,
     /// Recognised but not decodable in this milestone (maps, cuboids, formulas).
     Unsupported,
 }
@@ -95,8 +97,21 @@ pub struct ParamRow {
     pub display: String,
     /// Numeric physical value when the value is numeric — the edit field's source.
     pub phys_num: Option<f64>,
+    /// For 1D objects, the numeric extent behind the summary in `display`.
+    /// Exposed separately so the frontend can re-render at a different decimal
+    /// precision without a full re-decode.
+    pub phys_min: Option<f64>,
+    pub phys_max: Option<f64>,
     /// Choices for a TAB_VERB parameter, so the UI can offer a dropdown.
     pub enum_options: Option<Vec<String>>,
+    /// Decoded text of an ASCII characteristic, up to the first NUL.
+    pub text_value: Option<String>,
+    /// Total bytes the character array occupies.
+    pub text_capacity: Option<u32>,
+    /// Longest string the field accepts. One byte short of the capacity when
+    /// the array is used as a NUL-terminated C string, the full capacity when
+    /// it is a fixed-width field with no terminator.
+    pub text_max_len: Option<u32>,
     /// For 1D objects: point count.
     pub point_count: Option<u32>,
     pub lower_limit: f64,
@@ -147,6 +162,7 @@ pub struct CoverageStats {
     pub total_objects: usize,
     pub scalars: usize,
     pub curves: usize,
+    pub strings: usize,
     pub unsupported: usize,
     pub present_full: usize,
     pub present_partial: usize,

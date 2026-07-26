@@ -10,6 +10,8 @@
    * Props
    *   row          – the selected ParamRow, or null
    *   detail       – ParamDetail from the backend for 1D objects, or null
+   *   decimals     – decimal override for fractional values, or null for the
+   *                  A2L FORMAT default
    *   onEditValue  – (phys: number) => void
    *   onEditText   – (text: string) => void
    *   onGoto       – (addr: number) => void   jump to the address in the hex view
@@ -17,26 +19,50 @@
   let {
     row         = null,
     detail      = null,
+    decimals    = null,
     onEditValue = (_phys) => {},
     onEditText  = (_text) => {},
     onGoto      = (_addr) => {},
   } = $props();
 
+  /** Re-render a server-formatted number at the chosen precision. */
+  function atPrecision(value, fallback) {
+    if (decimals === null || value === null || value === undefined) return fallback;
+    // Whole numbers stay whole unless the default rendering already had a
+    // fractional part, matching the table's behaviour.
+    if (Number.isInteger(value) && !String(fallback).includes('.')) return fallback;
+    return value.toFixed(decimals);
+  }
+
   let draft = $state('');
   let error = $state('');
+
+  /**
+   * What the editor should start from. An ASCII field uses its decoded text,
+   * not `display`, which reads "(empty)" for an all-NUL array.
+   */
+  function initialDraft(r) {
+    if (!r) return '';
+    if (r.category === 'ascii') return r.text_value ?? '';
+    if (r.phys_num !== null && r.phys_num !== undefined) return String(r.phys_num);
+    return r.display ?? '';
+  }
 
   // Re-seed the editor whenever a different parameter is selected, or the
   // displayed value changes underneath us after an edit or an undo.
   $effect(() => {
     const key = row ? `${row.name}:${row.display}` : '';
     void key;
-    draft = row?.phys_num !== null && row?.phys_num !== undefined
-      ? String(row.phys_num)
-      : (row?.display ?? '');
+    draft = initialDraft(row);
     error = '';
   });
 
   const isEnum   = $derived(!!row?.enum_options);
+  const isText   = $derived(row?.category === 'ascii');
+  /** Characters left before the field is full. */
+  const textLeft = $derived(
+    isText && row?.text_max_len != null ? row.text_max_len - draft.length : 0
+  );
   const outLimit = $derived.by(() => {
     if (!row || row.phys_num === null || row.phys_num === undefined) return false;
     return row.phys_num < row.lower_limit || row.phys_num > row.upper_limit;
@@ -47,6 +73,24 @@
   function commit() {
     if (!row?.editable) return;
     if (isEnum) { onEditText(draft); return; }
+
+    if (isText) {
+      // The same rules the backend enforces, checked here so the user gets the
+      // message before a round-trip.
+      if (draft.length > row.text_max_len) {
+        error = `At most ${row.text_max_len} characters`;
+        return;
+      }
+      // eslint-disable-next-line no-control-regex
+      if (!/^[\x20-\x7E]*$/.test(draft)) {
+        error = 'Only printable ASCII';
+        return;
+      }
+      error = '';
+      onEditText(draft);
+      return;
+    }
+
     const v = Number(draft.trim());
     if (draft.trim() === '' || Number.isNaN(v)) {
       error = 'Enter a number';
@@ -63,7 +107,7 @@
   function handleKey(e) {
     if (e.key === 'Enter')  { commit(); e.preventDefault(); }
     if (e.key === 'Escape') {
-      draft = row?.phys_num != null ? String(row.phys_num) : (row?.display ?? '');
+      draft = initialDraft(row);
       error = '';
     }
   }
@@ -103,6 +147,18 @@
                 <option value={opt}>{opt}</option>
               {/each}
             </select>
+          {:else if isText}
+            <input
+              type="text"
+              class="text-input"
+              bind:value={draft}
+              onkeydown={handleKey}
+              maxlength={row.text_max_len}
+              class:invalid={!!error}
+              aria-label="String value"
+              spellcheck="false"
+              autocomplete="off"
+            />
           {:else}
             <input
               type="text"
@@ -117,12 +173,21 @@
         </div>
         {#if error}
           <div class="err">{error}</div>
+        {:else if isText}
+          <div class="counter" class:full={textLeft === 0}>
+            {draft.length} / {row.text_max_len} chars
+            {#if row.text_capacity > row.text_max_len}
+              <span class="counter-note">· 1 byte reserved for the terminator</span>
+            {/if}
+          </div>
+          <button class="apply" onclick={commit}>Apply</button>
         {:else if !isEnum}
           <button class="apply" onclick={commit}>Apply</button>
         {/if}
       {:else}
         <div class="value-static" class:out={outLimit}>
-          {row.display}{#if row.unit}<span class="unit"> {row.unit}</span>{/if}
+          <span class="v">{atPrecision(row.phys_num, row.display)}</span>
+          {#if row.unit}<span class="unit">{row.unit}</span>{/if}
         </div>
         {#if row.note}
           <div class="note">{row.note}</div>
@@ -141,6 +206,12 @@
           </tr>
           <tr><td>Type</td><td class="v">{row.datatype}</td></tr>
           <tr><td>Size</td><td class="v">{row.byte_size} B</td></tr>
+          {#if row.text_capacity}
+            <tr>
+              <td>Capacity</td>
+              <td class="v">{row.text_max_len} of {row.text_capacity} chars</td>
+            </tr>
+          {/if}
           {#if row.raw_hex}
             <tr><td>Raw</td><td class="v raw">{row.raw_hex}</td></tr>
           {/if}
@@ -180,8 +251,8 @@
               {#each points as p}
                 <tr>
                   <td class="i">{p.i}</td>
-                  <td class="ax">{p.axis ? p.axis.display : '—'}</td>
-                  <td class="r">{p.value ? p.value.display : '—'}</td>
+                  <td class="ax">{p.axis ? atPrecision(p.axis.phys, p.axis.display) : '—'}</td>
+                  <td class="r">{p.value ? atPrecision(p.value.phys, p.value.display) : '—'}</td>
                 </tr>
               {/each}
             </tbody>
@@ -275,6 +346,25 @@
 
   select { text-align: left; }
 
+  /* Strings run long — 41 characters here — so they get a smaller face than
+     the numeric field and read left-to-right like text. */
+  .text-input {
+    font-size: 11.5px;
+    text-align: left;
+    letter-spacing: 0.01em;
+  }
+
+  .counter {
+    margin-top: 5px;
+    font-size: 10.5px;
+    color: var(--c-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .counter.full { color: var(--c-diff-changed); }
+
+  .counter-note { color: var(--c-dim); opacity: 0.8; }
+
   input:focus, select:focus {
     outline: none;
     border-color: var(--c-accent);
@@ -310,7 +400,13 @@
     margin-top: 10px;
     font-size: 15px;
     color: var(--c-text);
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
   }
+
+  .value-static .v { word-break: break-all; }
 
   .value-static.out { color: var(--c-diff-changed); }
 

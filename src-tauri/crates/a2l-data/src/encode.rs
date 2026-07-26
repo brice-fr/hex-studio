@@ -52,6 +52,61 @@ pub fn encode_scalar(db: &A2lDatabase, name: &str, phys: f64) -> Result<EncodedW
     })
 }
 
+/// Encode a textual value: an enum label for a verbal scalar, or the contents
+/// of an ASCII character array.
+pub fn encode_text(db: &A2lDatabase, name: &str, text: &str) -> Result<EncodedWrite, String> {
+    let plan = db
+        .plan_any(name)
+        .ok_or_else(|| format!("'{name}' not found in the A2L description"))?;
+    match plan.category {
+        Category::Ascii => encode_ascii(db, name, text),
+        _ => encode_scalar_text(db, name, text),
+    }
+}
+
+/// Encode an ASCII character array.
+///
+/// The whole array is rewritten, NUL-padded to its full width. Writing only the
+/// new characters would leave the tail of a longer previous string in place —
+/// shortening "ASAM Test" to "Hi" would read back as "Hi" followed by "AM Test".
+pub fn encode_ascii(db: &A2lDatabase, name: &str, text: &str) -> Result<EncodedWrite, String> {
+    let plan = db
+        .plan_any(name)
+        .ok_or_else(|| format!("'{name}' not found in the A2L description"))?;
+
+    if plan.category != Category::Ascii {
+        return Err(format!("'{name}' is not an ASCII string"));
+    }
+    let field = plan
+        .layout
+        .fnc
+        .ok_or_else(|| format!("'{name}' has no character storage"))?;
+
+    let capacity = field.size() as usize;
+    if !text.is_ascii() {
+        return Err("only ASCII characters can be stored".to_string());
+    }
+    if text.bytes().any(|b| !(0x20..0x7F).contains(&b)) {
+        return Err("control characters cannot be stored".to_string());
+    }
+    if text.len() > capacity {
+        return Err(format!(
+            "'{name}' holds at most {capacity} characters, got {}",
+            text.len()
+        ));
+    }
+
+    let mut bytes = vec![0u8; capacity];
+    bytes[..text.len()].copy_from_slice(text.as_bytes());
+
+    Ok(EncodedWrite {
+        address: plan.address + field.offset,
+        bytes,
+        raw: text.len() as f64,
+        phys: text.len() as f64,
+    })
+}
+
 /// Encode a verbal (enumerated) physical value for a scalar object.
 pub fn encode_scalar_text(
     db: &A2lDatabase,

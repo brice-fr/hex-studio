@@ -222,14 +222,14 @@ pub fn a2l_encode_value(
     with_db(&state, |db| encode::encode_scalar(db, &name, phys))
 }
 
-/// Encode a verbal (enumerated) physical value into bytes.
+/// Encode a textual value — an enum label or an ASCII string — into bytes.
 #[tauri::command]
 pub fn a2l_encode_text(
     name: String,
     text: String,
     state: tauri::State<A2lState>,
 ) -> Result<EncodedWrite, String> {
-    with_db(&state, |db| encode::encode_scalar_text(db, &name, &text))
+    with_db(&state, |db| encode::encode_text(db, &name, &text))
 }
 
 #[cfg(test)]
