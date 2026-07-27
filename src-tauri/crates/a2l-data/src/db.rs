@@ -289,6 +289,10 @@ impl ObjectPlan {
     pub fn display_unit(&self) -> &str {
         match self.category {
             Category::Ascii => "",
+            // A map's table cell carries its shape rather than a quantity, and
+            // "4 × 5 hours" would read as nonsense. The unit still reaches the
+            // detail pane through ParamDetail::value_unit.
+            Category::Map => "",
             _ => &self.conv.unit,
         }
     }

@@ -1446,3 +1446,29 @@ fn no_object_is_rejected_for_being_multi_dimensional() {
         );
     }
 }
+
+/// The table cell says what each shape is: a curve by the span of its values,
+/// a map by its dimensions. A lowest-and-highest across a whole grid carries
+/// almost no information, and the decimals stepper must not turn it back into
+/// a range, so the span is deliberately left unset for a map.
+#[test]
+fn the_table_summarises_curves_by_span_and_maps_by_shape() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = decode::list_rows(&db, &img, false);
+    let find = |n: &str| rows.iter().find(|r| r.name == n).unwrap_or_else(|| panic!("{n}"));
+
+    let curve = find("ASAM.C.CURVE.STD_AXIS");
+    assert_eq!(curve.display, "-3.000 … 71.000");
+    assert!(curve.phys_min.is_some() && curve.phys_max.is_some());
+
+    for (name, shape) in [
+        ("ASAM.C.MAP.STD_AXIS.STD_AXIS", "4 × 5"),
+        ("ASAM.C.CUBOID.ROW_DIR", "2 × 3 × 4"),
+        ("ASAM.C.CUBE_4.ROW_DIR", "2 × 3 × 4 × 2"),
+    ] {
+        let row = find(name);
+        assert_eq!(row.display, shape, "{name}");
+        assert!(row.phys_min.is_none(), "{name} must not also carry a span");
+        assert!(row.unit.is_empty(), "{name}: a shape takes no unit");
+    }
+}

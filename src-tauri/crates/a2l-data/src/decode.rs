@@ -444,10 +444,21 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
             }
         }
 
-        // A map summarises the same way a curve does — the span of its values
-        // — with its shape carried alongside in `dims` rather than squeezed
-        // into the display string.
-        Category::Curve | Category::Map => {
+        // A map is identified by its shape, not by a value span. The lowest and
+        // highest cell of a whole grid say very little about it, whereas
+        // "4 × 5" says what it is at a glance — and leaving the span unset
+        // keeps the decimals stepper from reformatting the shape as a range.
+        Category::Map => {
+            let n = effective_points(plan, bytes.as_deref());
+            point_count = Some(n);
+            display = if presence == Presence::Absent {
+                "absent".into()
+            } else {
+                shape_label(&dims, n)
+            };
+        }
+
+        Category::Curve => {
             let n = effective_points(plan, bytes.as_deref());
             point_count = Some(n);
             if let (Some(bytes), Some(field)) = (&bytes, plan.layout.fnc.or(plan.layout.axis_pts())) {
@@ -623,15 +634,15 @@ fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan, dims: &[u32]) -> Vec<T> {
         .collect()
 }
 
-/// How a multi-dimensional object is labelled when there is nothing to
-/// summarise: `4 x 5` rather than a bare element count, since the shape is the
-/// interesting part and 20 alone says nothing.
+/// How a multi-dimensional object is labelled: `4 × 5` rather than a bare
+/// element count, since the shape is the interesting part and "20" alone says
+/// nothing about how those twenty are arranged.
 fn shape_label(dims: &[u32], n: u32) -> String {
     if dims.len() > 1 {
         dims.iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()
-            .join(" x ")
+            .join(" × ")
     } else {
         format!("{n} pts")
     }
