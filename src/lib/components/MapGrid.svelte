@@ -138,7 +138,7 @@
                 <button class="hbtn" onclick={() => begin(`axis:0:${x}`, axes[0]?.points[x]?.phys)}
                         title="Edit X breakpoint {x}">{xHeads[x]}</button>
               {:else}
-                {xHeads[x]}
+                <span class="h">{xHeads[x]}</span>
               {/if}
             </th>
           {/each}
@@ -165,7 +165,7 @@
                 <button class="hbtn" onclick={() => begin(`axis:1:${y}`, axes[1]?.points[y]?.phys)}
                         title="Edit Y breakpoint {y}">{yHeads[y]}</button>
               {:else}
-                {yHeads[y]}
+                <span class="h">{yHeads[y]}</span>
               {/if}
             </th>
 
@@ -321,7 +321,7 @@
 
   .cell.on::before { opacity: 0; }
 
-  .v, .cbtn, .hbtn {
+  .v, .cbtn, .hbtn, .h {
     position: relative;
     display: block;
     width: 100%;
@@ -331,6 +331,13 @@
     color: inherit;
     background: none;
     border: none;
+  }
+
+  /* Headings are labels rather than quantities, so they centre and take a
+     little more room than the values they sit above and beside. */
+  .h, .xh .hbtn, .yh .hbtn {
+    padding: 3px 10px;
+    text-align: center;
   }
 
   .cbtn, .hbtn { cursor: text; }
