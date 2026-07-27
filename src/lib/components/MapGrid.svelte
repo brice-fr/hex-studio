@@ -17,6 +17,8 @@
    *   compact      – read-only and truncated, for the detail pane
    *   shaded       – colour cells on a value ramp
    *   slice        – subscripts for dimensions 2 and up
+   *   highlight    – row index to mark, or null; linked to the plot
+   *   onHoverRow   – (row: number|null) => void
    *   onEditPoint  – (target, index, phys) => void
    *   onNavigate   – (name) => void   select another parameter
    */
@@ -28,6 +30,8 @@
     compact     = false,
     shaded      = true,
     slice       = /** @type {number[]} */ ([]),
+    highlight   = /** @type {number|null} */ (null),
+    onHoverRow  = (_row) => {},
     onEditPoint = (_target, _index, _phys) => {},
     onNavigate  = (_name) => {},
   } = $props();
@@ -147,7 +151,11 @@
       </thead>
       <tbody>
         {#each rows.slice(0, shownR) as row, y}
-          <tr>
+          <tr
+            class:traced={highlight === y}
+            onpointerenter={() => onHoverRow(y)}
+            onpointerleave={() => onHoverRow(null)}
+          >
             <th class="yh" class:ro={!yAccess.editable} title={yAccess.why || `Y ${y}`}>
               {#if editing === `axis:1:${y}`}
                 <!-- svelte-ignore a11y_autofocus -->
@@ -302,6 +310,10 @@
 
   /* A read-only header is dimmed; the legend below says which kind it is. */
   .xh.ro, .yh.ro { color: var(--c-muted); }
+
+  /* The row traced in the plot below, so the two read as one view. */
+  tr.traced .yh { color: var(--c-accent); }
+  tr.traced .cell { box-shadow: inset 0 -1px 0 var(--c-accent), inset 0 1px 0 var(--c-accent); }
 
   .cell {
     position: relative;

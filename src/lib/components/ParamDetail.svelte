@@ -19,6 +19,7 @@
    *   onEditPoint  – (target: 'value'|'axis', index: number, phys: number) => void
    */
   import MapGrid from './MapGrid.svelte';
+  import { buildPlot, nearestPoint } from '$lib/plot.js';
 
   let {
     row         = null,
@@ -229,36 +230,23 @@
    */
   const plot = $derived.by(() => {
     if (!points.length || plotW <= 0) return null;
-
     const data = points
       .map((p, i) => ({
         i,
         x: p.axis ? liveValue('axis', i, p.axis.phys) : i,
-        y: p.value ? liveValue('value', i, p.value.phys) : null,
-      }))
-      .filter((p) => p.y !== null && Number.isFinite(p.x) && Number.isFinite(p.y));
-    if (data.length < 2) return null;
-
-    const xs = data.map((p) => p.x);
-    const ys = data.map((p) => p.y);
-    const xLo = Math.min(...xs), xHi = Math.max(...xs);
-    const yLo = Math.min(...ys), yHi = Math.max(...ys);
-
-    const w = Math.max(1, plotW - PAD.l - PAD.r);
-    const h = PLOT_H - PAD.t - PAD.b;
-    // A constant series has no span to divide by; centre it instead of
-    // collapsing every point onto the top edge.
-    const sx = (v) => (xHi === xLo ? PAD.l + w / 2 : PAD.l + ((v - xLo) / (xHi - xLo)) * w);
-    const sy = (v) => (yHi === yLo ? PAD.t + h / 2 : PAD.t + h - ((v - yLo) / (yHi - yLo)) * h);
-
-    const screen = data.map((p) => ({ ...p, cx: sx(p.x), cy: sy(p.y) }));
-    return {
-      screen,
-      line: screen.map((p) => `${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(' '),
-      zero: yLo < 0 && yHi > 0 ? sy(0) : null,
-      xLo, xHi, yLo, yHi,
-    };
+        y: p.value ? liveValue('value', i, p.value.phys) : NaN,
+      }));
+    return buildPlot([data], { width: plotW, height: PLOT_H, pad: PAD });
   });
+
+  /** The single series, which is all a 1D object has. */
+  const screen = $derived(plot?.series[0]?.points ?? []);
+
+  /** Nearest plotted point to a pointer position, for hover and click. */
+  function pointAt(e) {
+    const box = e.currentTarget.getBoundingClientRect();
+    return nearestPoint(plot, e.clientX - box.left)?.point ?? null;
+  }
 
   /** Compact number for the plot caption, honouring the decimals override. */
   function fmtNum(v) {
@@ -267,18 +255,6 @@
     return Number.isInteger(v) ? String(v) : String(Number(v.toFixed(4)));
   }
 
-  /** Nearest plotted point to a pointer position, for hover and click. */
-  function nearestPoint(e) {
-    if (!plot) return null;
-    const box = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - box.left;
-    let best = null, bestD = Infinity;
-    for (const p of plot.screen) {
-      const d = Math.abs(p.cx - x);
-      if (d < bestD) { bestD = d; best = p; }
-    }
-    return best;
-  }
 
   /**
    * Pair axis breakpoints with function values for the curve table.
@@ -533,18 +509,18 @@
               height={PLOT_H}
               role="img"
               aria-label="Plot of {row.name}"
-              onpointermove={(e) => (hoverPoint = nearestPoint(e)?.i ?? null)}
+              onpointermove={(e) => (hoverPoint = pointAt(e)?.i ?? null)}
               onpointerleave={() => (hoverPoint = null)}
               onclick={(e) => {
-                const p = nearestPoint(e);
+                const p = pointAt(e);
                 if (p && detail?.values_editable) beginCell('value', p.i, points[p.i].value.phys);
               }}
             >
               {#if plot.zero !== null}
                 <line class="zero" x1={PAD.l} y1={plot.zero} x2={plotW - PAD.r} y2={plot.zero} />
               {/if}
-              <polyline class="line" points={plot.line} />
-              {#each plot.screen as p}
+              <polyline class="line" points={plot.series[0].line} />
+              {#each screen as p}
                 <circle
                   class="dot"
                   class:on={hoverPoint === p.i}
@@ -555,7 +531,7 @@
                 />
               {/each}
               {#if hoverPoint !== null}
-                {@const h = plot.screen.find((p) => p.i === hoverPoint)}
+                {@const h = screen.find((p) => p.i === hoverPoint)}
                 {#if h}
                   <line class="cursor" x1={h.cx} y1={PAD.t} x2={h.cx} y2={PLOT_H - PAD.b} />
                 {/if}
@@ -563,7 +539,7 @@
             </svg>
             <div class="plot-cap">
               {#if hoverPoint !== null}
-                {@const h = plot.screen.find((p) => p.i === hoverPoint)}
+                {@const h = screen.find((p) => p.i === hoverPoint)}
                 {#if h}
                   <span class="cap-i">#{h.i}</span>
                   <span>{fmtNum(h.x)}</span>

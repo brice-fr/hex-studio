@@ -21,6 +21,7 @@
    *   onClose      – () => void
    */
   import MapGrid from './MapGrid.svelte';
+  import MapPlot from './MapPlot.svelte';
 
   let {
     open        = false,
@@ -33,6 +34,11 @@
   } = $props();
 
   let shaded = $state(true);
+  let plotted = $state(true);
+
+  /** The row traced in the plot and marked in the grid. One piece of state
+   *  drives both, so they can never disagree about which row that is. */
+  let traced = $state(/** @type {number|null} */ (null));
 
   /** Subscripts for every dimension beyond the second. */
   let slice = $state(/** @type {number[]} */ ([]));
@@ -85,6 +91,10 @@
             <input type="checkbox" bind:checked={shaded}>
             Shade
           </label>
+          <label class="toggle" title="Plot each row as a curve">
+            <input type="checkbox" bind:checked={plotted}>
+            Curves
+          </label>
           <button class="btn-close" onclick={onClose} aria-label="Close">×</button>
         </div>
       </div>
@@ -127,8 +137,16 @@
       {/if}
 
       <div class="body">
-        <MapGrid {detail} {decimals} {shaded} {slice} {onEditPoint} {onNavigate} />
+        <MapGrid
+          {detail} {decimals} {shaded} {slice} {onEditPoint} {onNavigate}
+          highlight={traced}
+          onHoverRow={(y) => (traced = y)}
+        />
       </div>
+
+      {#if plotted}
+        <MapPlot {detail} {slice} {decimals} highlight={traced} onHover={(y) => (traced = y)} />
+      {/if}
     </div>
   </div>
 {/if}
