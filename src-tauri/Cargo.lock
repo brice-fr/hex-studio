@@ -9,6 +9,7 @@ dependencies = [
  "a2lfile",
  "quick-xml 0.41.0",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

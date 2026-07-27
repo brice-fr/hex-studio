@@ -101,14 +101,44 @@ pub fn encode_scalar(
 }
 
 /// Which part of an object's point table is being edited.
+///
+/// The wire form accepts both `"axis"` and `{"axis": 1}`: a one-dimensional
+/// caller means the only axis there is, and a map has to say which. Making the
+/// dimension mandatory would break every existing caller for the sake of a
+/// number that is always zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", try_from = "WireTarget")]
 pub enum PointTarget {
     /// A function value, or the points of a standalone AXIS_PTS object.
     Value,
     /// A breakpoint of the axis at this dimension, X being 0. A curve has only
     /// dimension 0; a map addresses its Y breakpoints as `Axis(1)`.
     Axis(usize),
+}
+
+/// How a [`PointTarget`] arrives from the frontend.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum WireTarget {
+    /// `"value"`, or `"axis"` for the only axis a curve has.
+    Named(String),
+    /// `{"axis": 1}` — the Y breakpoints of a map.
+    Indexed { axis: usize },
+}
+
+impl TryFrom<WireTarget> for PointTarget {
+    type Error = String;
+
+    fn try_from(w: WireTarget) -> Result<Self, Self::Error> {
+        match w {
+            WireTarget::Named(n) => match n.as_str() {
+                "value" => Ok(PointTarget::Value),
+                "axis" => Ok(PointTarget::AXIS),
+                other => Err(format!("unknown point target '{other}'")),
+            },
+            WireTarget::Indexed { axis } => Ok(PointTarget::Axis(axis)),
+        }
+    }
 }
 
 impl PointTarget {
@@ -360,4 +390,37 @@ pub fn encode_scalar_text(
         raw,
         phys: raw,
     })
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+
+    /// The frontend sends this value across the Tauri boundary, so its JSON
+    /// shape is part of the contract rather than an implementation detail.
+    #[test]
+    fn point_target_round_trips_through_json() {
+        let value = serde_json::to_string(&PointTarget::Value).unwrap();
+        let axis0 = serde_json::to_string(&PointTarget::Axis(0)).unwrap();
+        let axis1 = serde_json::to_string(&PointTarget::Axis(1)).unwrap();
+        println!("Value  -> {value}");
+        println!("Axis(0)-> {axis0}");
+        println!("Axis(1)-> {axis1}");
+
+        // What the one-dimensional frontend has always sent must keep working;
+        // making the dimension mandatory silently broke every axis edit.
+        let parse = |s: &str| serde_json::from_str::<PointTarget>(s);
+        assert_eq!(parse("\"value\"").unwrap(), PointTarget::Value);
+        assert_eq!(parse("\"axis\"").unwrap(), PointTarget::AXIS);
+        assert_eq!(parse("{\"axis\":0}").unwrap(), PointTarget::Axis(0));
+        assert_eq!(parse("{\"axis\":2}").unwrap(), PointTarget::Axis(2));
+
+        // And everything we emit must come back as itself.
+        for t in [PointTarget::Value, PointTarget::Axis(0), PointTarget::Axis(3)] {
+            let json = serde_json::to_string(&t).unwrap();
+            assert_eq!(parse(&json).unwrap(), t, "round trip of {json}");
+        }
+
+        assert!(parse("\"elbow\"").is_err(), "an unknown target must not pass silently");
+    }
 }
