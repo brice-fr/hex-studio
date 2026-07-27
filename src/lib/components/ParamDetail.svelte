@@ -18,6 +18,8 @@
    *   onNavigate   – (name: string) => void   select another parameter
    *   onEditPoint  – (target: 'value'|'axis', index: number, phys: number) => void
    */
+  import MapGrid from './MapGrid.svelte';
+
   let {
     row         = null,
     detail      = null,
@@ -27,6 +29,7 @@
     onGoto      = (_addr) => {},
     onNavigate  = (_name) => {},
     onEditPoint = (_target, _index, _phys) => {},
+    onOpenMap   = (_name) => {},
   } = $props();
 
   /** Which point cell is being edited, as `"target:index"`. */
@@ -493,10 +496,16 @@
             </tbody>
           </table>
         </div>
-        <p class="pending">
-          Values decode and encode correctly; the grid editor is not built yet.
-          Use the hex view to inspect the bytes.
-        </p>
+        <div class="sub-header">
+          Values
+          {#if detail?.value_unit}<span class="units">{detail.value_unit}</span>{/if}
+        </div>
+        <!-- A preview only: the pane is too narrow for a real grid, so this
+             elides and the editor opens full size. -->
+        <MapGrid {detail} {decimals} compact />
+        <button class="open-map" onclick={() => onOpenMap(row.name)}>
+          {detail?.values_editable ? 'Edit values…' : 'View values…'}
+        </button>
       {/if}
 
       <!-- ── 1D points ── -->
@@ -909,13 +918,20 @@
     letter-spacing: 0.5px;
   }
 
-  .pending {
-    font-size: 11px;
-    color: var(--c-muted);
-    margin: 6px 0 0;
-    padding: 0 2px;
-    line-height: 1.45;
+  .open-map {
+    align-self: flex-start;
+    margin-top: 7px;
+    background: var(--c-hover);
+    border: 1px solid var(--c-border2);
+    border-radius: 5px;
+    color: var(--c-text);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    cursor: pointer;
   }
+
+  .open-map:hover { background: var(--c-border2); }
 
   .plot-wrap {
     margin: 4px 0 2px;

@@ -4,6 +4,7 @@
 <script>
   import { tick } from 'svelte';
   import ParamDetail from './ParamDetail.svelte';
+  import MapEditor from './MapEditor.svelte';
 
   /**
    * DataView — physical-value view of the image, driven by a loaded A2L.
@@ -300,6 +301,11 @@
 
   let query    = $state('');
   let category = $state('all');
+
+  /** The full-size map grid. Closes on a new selection: it is bound to one
+   *  object, and leaving it open over a different one would be a lie. */
+  let mapOpen = $state(false);
+  $effect(() => { void selected; mapOpen = false; });
   let scrollEl = $state(/** @type {HTMLDivElement|null} */ (null));
   let scrollTop = $state(0);
   let viewportH = $state(400);
@@ -621,10 +627,22 @@
         onNavigate={navigateTo}
         onEditPoint={(target, index, phys) =>
           selectedRow && onEditPoint(selectedRow.name, target, index, phys)}
+        onOpenMap={() => (mapOpen = true)}
       />
     </aside>
   </div>
 </div>
+
+<MapEditor
+  open={mapOpen}
+  row={selectedRow}
+  {detail}
+  {decimals}
+  onNavigate={navigateTo}
+  onEditPoint={(target, index, phys) =>
+    selectedRow && onEditPoint(selectedRow.name, target, index, phys)}
+  onClose={() => (mapOpen = false)}
+/>
 
 <style>
   .data-view {
