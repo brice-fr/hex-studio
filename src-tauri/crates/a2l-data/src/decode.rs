@@ -472,7 +472,18 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
                     })
                     .collect();
                 if phys.is_empty() {
-                    display = shape_label(&dims, n);
+                    // Every point converts to a label rather than a number, so
+                    // there is no span to show. Naming the labels beats a bare
+                    // point count, which says nothing about a curve whose
+                    // values are otherwise invisible from the table.
+                    let labels: Vec<String> = values
+                        .iter()
+                        .filter_map(|r| match plan.conv.conversion.to_phys(*r) {
+                            Phys::Text(t) => Some(t),
+                            _ => None,
+                        })
+                        .collect();
+                    display = label_summary(&labels).unwrap_or_else(|| shape_label(&dims, n));
                 } else {
                     let lo = phys.iter().cloned().fold(f64::INFINITY, f64::min);
                     let hi = phys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -632,6 +643,30 @@ fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan, dims: &[u32]) -> Vec<T> {
     (0..n)
         .map(|i| stored[plan.storage_slot(i, n) as usize].clone())
         .collect()
+}
+
+/// Summarise a verbal array by the distinct labels it holds.
+///
+/// `red, blue, green` reads far better than `8 pts`, and the overflow marker
+/// keeps a long enumeration from swamping the column. Returns `None` when
+/// there is nothing to name, leaving the caller its own fallback.
+fn label_summary(labels: &[String]) -> Option<String> {
+    const SHOWN: usize = 3;
+    let mut distinct: Vec<&str> = Vec::new();
+    for l in labels {
+        let l = l.trim();
+        if !l.is_empty() && !distinct.contains(&l) {
+            distinct.push(l);
+        }
+    }
+    if distinct.is_empty() {
+        return None;
+    }
+    let head = distinct.iter().take(SHOWN).copied().collect::<Vec<_>>().join(", ");
+    Some(match distinct.len().saturating_sub(SHOWN) {
+        0 => head,
+        more => format!("{head} +{more}"),
+    })
 }
 
 /// How a multi-dimensional object is labelled: `4 × 5` rather than a bare
@@ -854,6 +889,20 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_summary_names_the_distinct_labels() {
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(label_summary(&l(&["red", "red", "blue"])).unwrap(), "red, blue");
+        assert_eq!(
+            label_summary(&l(&["a", "b", "c", "d", "e"])).unwrap(),
+            "a, b, c +2",
+            "a long enumeration must not swamp the column"
+        );
+        // Nothing to name: the caller falls back to a point count.
+        assert!(label_summary(&[]).is_none());
+        assert!(label_summary(&l(&["", "  "])).is_none());
+    }
 
     #[test]
     fn reads_unsigned_little_endian() {
