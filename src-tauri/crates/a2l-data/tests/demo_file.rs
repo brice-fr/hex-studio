@@ -239,9 +239,10 @@ fn coverage_statistics_are_self_consistent() {
 
     assert_eq!(s.total_objects, 89);
     assert_eq!(
-        s.scalars + s.curves + s.strings + s.virtuals + s.unsupported,
+        s.scalars + s.curves + s.maps + s.strings + s.virtuals + s.unsupported,
         s.total_objects
     );
+    assert!(s.maps > 0, "the demo file declares maps and cuboids");
     assert!(s.strings > 0, "the demo file declares an ASCII string");
     assert_eq!(
         s.present_full + s.present_partial + s.absent + s.presence_unknown + s.virtuals,
@@ -343,7 +344,7 @@ fn editing_a_point_maps_display_index_back_to_storage() {
     let Some((db, img)) = open_demo() else { return };
     let name = "ASAM.C.CURVE.STD_AXIS";
     let plan = db.plan_characteristic(name).expect("curve");
-    assert!(plan.display_reversed, "this curve is stored INDEX_DECR");
+    assert!(plan.dim_reversed(0), "this curve is stored INDEX_DECR");
 
     // Displayed values are -3, -1, 6, 71, 15, 7, 13, 9 against axis -5 … 22.
     // Display index 0 pairs with axis -5, whose value is the *last* stored
@@ -357,7 +358,7 @@ fn editing_a_point_maps_display_index_back_to_storage() {
 
     // The axis column reverses the same way. Axis field starts at offset 1 and
     // holds SBYTEs, so display index 0 is at 1 + 7 = 8.
-    let w = encode_point(&db, &img, name, PointTarget::Axis, 0, -6.0).expect("encode");
+    let w = encode_point(&db, &img, name, PointTarget::AXIS, 0, -6.0).expect("encode");
     assert_eq!(w.address, plan.address + 8);
     assert_eq!(w.bytes, vec![0xFA], "-6 as an SBYTE");
 
@@ -406,7 +407,7 @@ fn a_shared_axis_refuses_edits_and_says_where_to_go() {
     use a2l_data::encode::{encode_point, PointTarget};
     let Some((db, img)) = open_demo() else { return };
 
-    let err = encode_point(&db, &img, "ASAM.C.CURVE.COM_AXIS", PointTarget::Axis, 0, 1.0)
+    let err = encode_point(&db, &img, "ASAM.C.CURVE.COM_AXIS", PointTarget::AXIS, 0, 1.0)
         .expect_err("a shared axis is not editable through the curve");
     assert!(
         err.contains("ASAM.C.AXIS_PTS.UBYTE_8"),
@@ -421,7 +422,7 @@ fn a_shared_axis_refuses_edits_and_says_where_to_go() {
     );
 
     // A computed axis has no bytes to write.
-    let err = encode_point(&db, &img, "ASAM.C.CURVE.FIX_AXIS.PAR", PointTarget::Axis, 0, 1.0)
+    let err = encode_point(&db, &img, "ASAM.C.CURVE.FIX_AXIS.PAR", PointTarget::AXIS, 0, 1.0)
         .expect_err("FIX_AXIS is computed");
     assert!(err.contains("FIX_AXIS"), "{err}");
 }
@@ -1025,23 +1026,48 @@ fn importing_the_shipped_cdfx_changes_nothing() {
     assert_eq!(report.file_instances, 86);
     assert!(report.matched > 60, "most instances should resolve");
 
-    // The shipped file rounds every value to its A2L FORMAT, which for the two
-    // IEEE scalars loses real precision — it records -3 for a stored
-    // -3.000000491882041. Those two are expected to differ; nothing else is.
-    let names: Vec<&str> = report.changes.iter().map(|c| c.name.as_str()).collect();
+    // Two families of expected difference, and nothing else.
+    //
+    // The file rounds every value to its A2L FORMAT, which for the two IEEE
+    // scalars loses real precision — it records -3 for a stored
+    // -3.000000491882041.
+    //
+    // The cuboid is the shipped file disagreeing with itself. Its X axis is
+    // ASAM.C.AXIS_PTS.UBYTE_8, stored INDEX_DECR, and three other objects
+    // sharing that same axis — ASAM.C.CURVE.COM_AXIS,
+    // ASAM.C.MAP.COM_AXIS.FIX_AXIS and ASAM.C.MAP.COM_AXIS.FIX_AXIS_2 — all
+    // record their values mirrored along X, which is what a decreasing axis
+    // presented ascending requires. This one cuboid does not. Mirroring
+    // uniformly is the defensible reading, so the deviation is recorded here
+    // rather than special-cased in the decoder.
+    const CUBOID: &str = "ASAM.C.CUBOID.COM_AXIS.FIX_AXIS.STD_AXIS";
+    let mut names: Vec<&str> = report.changes.iter().map(|c| c.name.as_str()).collect();
+    names.dedup();
     assert_eq!(
         names,
         vec![
+            CUBOID,
             "ASAM.C.SCALAR.FLOAT32_IEEE.IDENTICAL",
             "ASAM.C.SCALAR.FLOAT64_IEEE.IDENTICAL",
         ],
-        "only the file's float rounding should show up as a change"
+        "only the file's float rounding and its one inconsistent cuboid should differ"
     );
-    assert_eq!(report.unchanged, report.matched - 2);
 
-    // And the report must make that rounding visible rather than printing
-    // "-3 -> -3", which is what the A2L FORMAT alone would produce.
-    let f64_change = &report.changes[1];
+    // The cuboid's whole 96 values differ, and only along X: the values it
+    // reports are its own, read the other way round.
+    let cuboid: Vec<f64> = report
+        .changes
+        .iter()
+        .filter(|c| c.name == CUBOID)
+        .filter_map(|c| c.incoming.parse::<f64>().ok())
+        .collect();
+    assert_eq!(cuboid.len(), 96, "the disagreement is total, not partial");
+
+    let f64_change = report
+        .changes
+        .iter()
+        .find(|c| c.name == "ASAM.C.SCALAR.FLOAT64_IEEE.IDENTICAL")
+        .expect("the float64 scalar differs");
     assert_eq!(f64_change.current, "-3.000000491882041");
     assert_eq!(f64_change.incoming, "-3");
 }
@@ -1066,7 +1092,7 @@ fn import_reports_only_what_actually_differs() {
     let report = a2l_data::sync::plan_import(&db, &img, &file);
     // The two edits, plus the two float scalars the file rounds (see
     // `importing_the_shipped_cdfx_changes_nothing`).
-    assert_eq!(report.changes.len(), 4);
+    assert_eq!(report.changes.len(), 4 + 96);
 
     let scalar = report
         .changes
@@ -1137,6 +1163,11 @@ fn export_matches_the_shipped_cdfx_values() {
         let Some(theirs) = shipped.get(&inst.name) else { continue };
         if inst.values.len() != theirs.values.len() {
             continue; // shapes we model differently, e.g. rescale pairs
+        }
+        // See `importing_the_shipped_cdfx_changes_nothing`: this one cuboid
+        // contradicts every other user of its own INDEX_DECR axis.
+        if inst.name == "ASAM.C.CUBOID.COM_AXIS.FIX_AXIS.STD_AXIS" {
+            continue;
         }
         for (a, b) in inst.values.iter().zip(&theirs.values) {
             match (a, b) {
@@ -1217,5 +1248,201 @@ fn column_dir_writes_where_it_reads() {
             w.address
         );
         assert!(w.address >= plan.address && w.address < plan.address + plan.byte_size());
+    }
+}
+
+// ── Multi-dimensional objects ────────────────────────────────────────────────
+
+/// Maps, cuboids and cubes must resolve to a shape and a size, not to
+/// "unsupported".
+#[test]
+fn multi_dimensional_objects_are_shaped_and_sized() {
+    let Some((db, _)) = open_demo() else { return };
+
+    let cases: [(&str, &[u32], u32); 4] = [
+        // 4 x 5 SWORD values, plus two count bytes and 4+5 SBYTE axis bytes.
+        ("ASAM.C.MAP.STD_AXIS.STD_AXIS", &[4, 5], 2 + 9 + 1 + 40),
+        // A shared X axis and a computed Y axis occupy no bytes of their own.
+        ("ASAM.C.MAP.COM_AXIS.FIX_AXIS", &[8, 3], 48),
+        ("ASAM.C.CUBOID.ROW_DIR", &[2, 3, 4], 3 + 9 + 24),
+        ("ASAM.C.CUBE_4.ROW_DIR", &[2, 3, 4, 2], 4 + 11 + 48),
+    ];
+
+    for (name, dims, bytes) in cases {
+        let plan = db.plan_characteristic(name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(plan.category, Category::Map, "{name}");
+        assert_eq!(plan.dims, dims.to_vec(), "{name}");
+        assert_eq!(
+            plan.declared_points,
+            dims.iter().product::<u32>(),
+            "{name} element count is the product of its dimensions"
+        );
+        assert_eq!(plan.byte_size(), bytes, "{name}");
+        assert_eq!(plan.axes.len(), dims.len(), "{name} declares one axis per dimension");
+    }
+}
+
+/// The demo file stores the same 2x3x4 cuboid twice, once ROW_DIR and once
+/// COLUMN_DIR, so the pair checks the reader against itself — and pins down
+/// that COLUMN_DIR swaps X with Y rather than reversing the whole dimension
+/// order, which for three dimensions is a different permutation.
+#[test]
+fn row_dir_and_column_dir_cuboids_agree() {
+    let Some((db, img)) = open_demo() else { return };
+
+    let read = |name: &str| -> Vec<f64> {
+        decode::detail_for(&db, &img, name)
+            .unwrap_or_else(|| panic!("{name} missing"))
+            .values
+            .iter()
+            .map(|p| p.phys)
+            .collect()
+    };
+
+    let row = read("ASAM.C.CUBOID.ROW_DIR");
+    assert_eq!(row, (1..=24).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(read("ASAM.C.CUBOID.COLUMN_DIR"), row);
+
+    let row4 = read("ASAM.C.CUBE_4.ROW_DIR");
+    assert_eq!(row4.len(), 48, "2 x 3 x 4 x 2");
+    assert_eq!(row4, (1..=48).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(read("ASAM.C.CUBE_4.COLUMN_DIR"), row4);
+}
+
+/// A map's values and both its axes, against the shipped CDFX.
+#[test]
+fn map_decodes_its_values_and_every_axis() {
+    let Some((db, img)) = open_demo() else { return };
+    let detail =
+        decode::detail_for(&db, &img, "ASAM.C.MAP.STD_AXIS.STD_AXIS").expect("detail");
+
+    assert_eq!(detail.dims, vec![4, 5]);
+    // The CDFX writes this map as five groups of four holding 0..19, so the
+    // first dimension is the one that varies fastest.
+    let values: Vec<f64> = detail.values.iter().map(|p| p.phys).collect();
+    assert_eq!(values, (0..20).map(f64::from).collect::<Vec<_>>());
+
+    assert_eq!(detail.axes.len(), 2);
+    let x: Vec<f64> = detail.axes[0].points.iter().map(|p| p.phys).collect();
+    assert_eq!(x, vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(detail.axes[0].kind, "STD_AXIS");
+    assert!(detail.axes[0].editable, "a STD_AXIS is stored here and writable");
+
+    // The Y axis has a verbal conversion, so it renders labels rather than
+    // numbers — the CDFX records 'red', 'orange', 'yellow', 'green', 'blue'.
+    let y: Vec<String> = detail.axes[1].points.iter().map(|p| p.display.clone()).collect();
+    assert_eq!(y, vec!["red", "orange", "yellow", "green", "blue"]);
+
+    // The X axis is mirrored into the flat fields the 1D table reads.
+    assert_eq!(detail.axis.len(), 4);
+    assert_eq!(detail.axis_kind, "STD_AXIS");
+}
+
+/// A shared or computed axis is reported but not writable through the map.
+#[test]
+fn map_axis_ownership_is_reported() {
+    let Some((db, img)) = open_demo() else { return };
+    let detail = decode::detail_for(&db, &img, "ASAM.C.MAP.COM_AXIS.FIX_AXIS").expect("detail");
+
+    assert_eq!(detail.axes.len(), 2);
+    assert_eq!(detail.axes[0].kind, "COM_AXIS");
+    assert_eq!(
+        detail.axes[0].reference.as_deref(),
+        Some("ASAM.C.AXIS_PTS.UBYTE_8")
+    );
+    assert!(!detail.axes[0].editable, "a shared axis is edited on its own object");
+
+    assert_eq!(detail.axes[1].kind, "FIX_AXIS");
+    assert!(!detail.axes[1].editable, "a FIX_AXIS occupies no bytes");
+    let fixed: Vec<f64> = detail.axes[1].points.iter().map(|p| p.phys).collect();
+    assert_eq!(fixed, vec![1.0, 2.0, 3.0], "FIX_AXIS_PAR_DIST 1 1 3");
+}
+
+/// Writing any element of a map must land on the byte the same index reads —
+/// for both storage directions, and for the axes of each dimension.
+#[test]
+fn map_writes_where_it_reads() {
+    let Some((db, img)) = open_demo() else { return };
+    use a2l_data::encode::{encode_point, PointTarget};
+
+    for name in ["ASAM.C.CUBOID.ROW_DIR", "ASAM.C.CUBOID.COLUMN_DIR"] {
+        let detail = decode::detail_for(&db, &img, name).expect("detail");
+        let plan = db.plan_characteristic(name).expect("present");
+
+        for (index, point) in detail.values.iter().enumerate() {
+            let w = encode_point(&db, &img, name, PointTarget::Value, index as u32, 99.0)
+                .unwrap_or_else(|e| panic!("{name}[{index}]: {e}"));
+            let stored = img.read(w.address, 1).expect("in image")[0] as i8;
+            assert_eq!(
+                f64::from(stored),
+                point.phys,
+                "{name}[{index}] writes {:#x}, which holds {stored} not {}",
+                w.address,
+                point.phys
+            );
+            assert!(w.address >= plan.address && w.address < plan.address + plan.byte_size());
+        }
+
+        // Every dimension's own breakpoints, addressed by dimension index.
+        for (d, axis) in detail.axes.iter().enumerate() {
+            for (i, point) in axis.points.iter().enumerate() {
+                let w = encode_point(&db, &img, name, PointTarget::Axis(d), i as u32, 7.0)
+                    .unwrap_or_else(|e| panic!("{name} axis {d}[{i}]: {e}"));
+                let stored = img.read(w.address, 1).expect("in image")[0] as i8;
+                assert_eq!(f64::from(stored), point.phys, "{name} axis {d}[{i}]");
+            }
+        }
+    }
+}
+
+/// Exported maps carry their shape and one container per axis.
+#[test]
+fn exported_maps_declare_their_shape_and_axes() {
+    let Some((db, img)) = open_demo() else { return };
+    let instances = a2l_data::sync::export(&db, &img);
+
+    let by_name = |n: &str| instances.iter().find(|i| i.name == n);
+
+    let map = by_name("ASAM.C.MAP.STD_AXIS.STD_AXIS").expect("map exported");
+    assert_eq!(map.category, "MAP");
+    assert_eq!(map.array_size, vec![4, 5]);
+    assert_eq!(map.values.len(), 20);
+    assert_eq!(map.axes.len(), 2, "one SW-AXIS-CONT per dimension");
+    assert_eq!(map.axes[0].category, "STD_AXIS");
+    assert_eq!(map.axes[1].category, "STD_AXIS");
+
+    let cuboid = by_name("ASAM.C.CUBOID.ROW_DIR").expect("cuboid exported");
+    assert_eq!(cuboid.category, "CUBOID");
+    assert_eq!(cuboid.array_size, vec![2, 3, 4]);
+
+    let cube = by_name("ASAM.C.CUBE_4.ROW_DIR").expect("cube exported");
+    assert_eq!(cube.category, "CUBE_4");
+    assert_eq!(cube.values.len(), 48);
+
+    // A shared axis is exported as a reference, not as duplicated points.
+    let shared = by_name("ASAM.C.MAP.COM_AXIS.FIX_AXIS").expect("map exported");
+    assert_eq!(
+        shared.axes[0].instance_ref.as_deref(),
+        Some("ASAM.C.AXIS_PTS.UBYTE_8")
+    );
+    assert!(shared.axes[0].values.is_empty());
+}
+
+/// Nothing should still be reported as an unsupported shape: every remaining
+/// "unsupported" must be a conversion or record-layout problem, not a
+/// dimension count.
+#[test]
+fn no_object_is_rejected_for_being_multi_dimensional() {
+    let Some((db, img)) = open_demo() else { return };
+    for row in decode::list_rows(&db, &img, false) {
+        if row.category != Category::Unsupported {
+            continue;
+        }
+        let note = row.note.clone().unwrap_or_default();
+        assert!(
+            !note.contains("dimension") && !note.contains("maps") && !note.contains("cub"),
+            "{} is still rejected for its shape: {note}",
+            row.name
+        );
     }
 }

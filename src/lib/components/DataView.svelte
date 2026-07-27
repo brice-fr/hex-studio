@@ -50,6 +50,7 @@
   const CATEGORY_GLYPH = {
     scalar: '·',   // middle dot — the quiet, ordinary case
     curve: '∿',    // sine wave
+    map: '▦',      // a grid, for two or more dimensions
     ascii: '"',    // quote mark for a character array
     virtual: 'ƒ',  // computed by a formula
     unsupported: '!',
@@ -331,6 +332,7 @@
     scalar:      (r) => r.category === 'scalar',
     curve:       (r) => r.category === 'curve' && !isAxis(r),
     axis:        isAxis,
+    map:         (r) => r.category === 'map',
     ascii:       (r) => r.category === 'ascii',
     virtual:     (r) => r.category === 'virtual',
     unsupported: (r) => r.category === 'unsupported',
@@ -422,6 +424,12 @@
         <span class="s-label">Absent</span>
         <span class="s-val dim">{stats.absent}</span>
       </div>
+      <!-- Counted apart from the three above: a computed parameter is never
+           stored, so it is neither present nor missing. -->
+      <div class="stat" title="Computed parameters — never stored, so not counted as present or absent">
+        <span class="s-label">Virtual</span>
+        <span class="s-val virt">{stats.virtuals}</span>
+      </div>
       <div class="stat">
         <span class="s-label">Described</span>
         <span class="s-val">{num(stats.described_present_bytes)} B</span>
@@ -446,6 +454,7 @@
         { id: 'scalar',      label: 'Scalars',     n: counts.scalar },
         { id: 'curve',       label: '1D curves',   n: counts.curve },
         { id: 'axis',        label: 'Axes',        n: counts.axis },
+        { id: 'map',         label: 'Maps & cubes', n: counts.map },
         { id: 'ascii',       label: 'Strings',     n: counts.ascii },
         { id: 'virtual',     label: 'Virtual',     n: counts.virtual },
         { id: 'unsupported', label: 'Unsupported', n: counts.unsupported },
@@ -658,6 +667,7 @@
   .s-val.ok     { color: var(--c-diff-cmp-only); }
   .s-val.warn   { color: var(--c-diff-changed); }
   .s-val.dim    { color: var(--c-muted); }
+  .s-val.virt   { color: var(--c-diff-ref-only); }
   .s-val.accent { color: var(--c-accent-t); }
 
   /* ── Body: sidebar | table | detail ── */
@@ -939,6 +949,7 @@
 
   .glyph.scalar      { color: var(--c-dim); }
   .glyph.axis        { color: var(--c-addr); }
+  .glyph.map         { color: var(--c-accent, #4a9eff); }
   .glyph.virtual     { color: var(--c-diff-ref-only); }
   .glyph.unsupported { color: var(--c-diff-changed); }
 

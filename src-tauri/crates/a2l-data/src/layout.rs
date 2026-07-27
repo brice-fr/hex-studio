@@ -225,17 +225,30 @@ impl Field {
     }
 }
 
-/// A RECORD_LAYOUT resolved against a concrete point count.
+/// The greatest number of axes A2L can describe: X, Y, Z, 4 and 5, which is
+/// what makes `CUBE_5` the largest characteristic type in the standard.
+pub const MAX_AXES: usize = 5;
+
+/// One dimension's stored breakpoints.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AxisLayout {
+    /// Where the current point count is stored, when the layout has one.
+    pub no_axis_pts: Option<Field>,
+    /// The breakpoints themselves, when stored inside this record.
+    pub axis_pts: Option<Field>,
+    /// True when this axis is stored highest-value-first.
+    pub index_decr: bool,
+}
+
+/// A RECORD_LAYOUT resolved against concrete per-dimension point counts.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedLayout {
     pub total_size: u32,
-    /// Where the current point count is stored, when the layout has one.
-    pub no_axis_pts: Option<Field>,
-    /// The axis breakpoints, when stored inside this record.
-    pub axis_pts: Option<Field>,
-    /// True when the axis is stored highest-value-first.
-    pub axis_index_decr: bool,
-    /// The function values.
+    /// One entry per dimension the object declares, X first. A scalar has
+    /// none; a curve one; a `CUBE_5` five.
+    pub axes: Vec<AxisLayout>,
+    /// The function values. For a multi-dimensional object `count` is the
+    /// product of every dimension.
     pub fnc: Option<Field>,
     /// True when `FNC_VALUES` declares `COLUMN_DIR`, so a multi-dimensional
     /// object is stored with its *last* index varying fastest.
@@ -246,10 +259,34 @@ pub struct ResolvedLayout {
     pub rescale: Option<Field>,
 }
 
+impl ResolvedLayout {
+    /// The X axis, which is the only one a scalar, curve or axis object has.
+    pub fn axis(&self) -> Option<&AxisLayout> {
+        self.axes.first()
+    }
+
+    /// X-axis breakpoints, the common case.
+    pub fn axis_pts(&self) -> Option<Field> {
+        self.axis().and_then(|a| a.axis_pts)
+    }
+
+    /// The count field of the X axis.
+    pub fn no_axis_pts(&self) -> Option<Field> {
+        self.axis().and_then(|a| a.no_axis_pts)
+    }
+
+    /// Whether the X axis is stored highest-first.
+    pub fn axis_index_decr(&self) -> bool {
+        self.axis().map(|a| a.index_decr).unwrap_or(false)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
-    NoAxisPts,
-    AxisPts,
+    /// The point-count field of dimension `usize`.
+    NoAxisPts(usize),
+    /// The breakpoints of dimension `usize`.
+    AxisPts(usize),
     Fnc,
     Rescale,
     /// Pure padding: it occupies bytes and shifts what follows, but holds
@@ -273,32 +310,58 @@ fn align_up(offset: u32, border: u32) -> u32 {
     offset.div_ceil(border) * border
 }
 
-/// Resolve the X-dimension fields of a record layout for `n_points` points.
+/// Resolve a record layout against one point count per dimension.
 ///
-/// Only the fields this milestone understands take part: `NO_AXIS_PTS_X`,
-/// `AXIS_PTS_X` and `FNC_VALUES`. Higher dimensions are handled by the caller
-/// classifying the object as unsupported before it gets here.
-pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> ResolvedLayout {
+/// `dims` is X first. A scalar passes `&[1]`, a curve `&[n]`, a 4x5 map
+/// `&[4, 5]`. The function values span the product of every dimension; each
+/// axis's own breakpoints span only its own count.
+///
+/// Fields are placed by walking them in declared `position` order and applying
+/// the alignment borders from MOD_COMMON, which is what decides whether the
+/// values of a SWORD-over-SBYTE curve start at offset 9 or 10.
+pub fn resolve(rl: &RecordLayout, aligns: &Alignments, dims: &[u32]) -> ResolvedLayout {
     let aligns = aligns.overridden_by(rl);
+    let n_axes = dims.len().min(MAX_AXES);
+    let points = |d: usize| dims.get(d).copied().unwrap_or(1);
 
-    // Gather the fields we support, tagged with their declared position.
+    // One (count field, breakpoints field, order) triple per dimension, as the
+    // A2L spells them: X, Y, Z, 4, 5.
+    let no_axis_pts = [
+        rl.no_axis_pts_x.as_ref(),
+        rl.no_axis_pts_y.as_ref(),
+        rl.no_axis_pts_z.as_ref(),
+        rl.no_axis_pts_4.as_ref(),
+        rl.no_axis_pts_5.as_ref(),
+    ];
+    let axis_pts = [
+        rl.axis_pts_x.as_ref(),
+        rl.axis_pts_y.as_ref(),
+        rl.axis_pts_z.as_ref(),
+        rl.axis_pts_4.as_ref(),
+        rl.axis_pts_5.as_ref(),
+    ];
+
+    // Gather every field, tagged with its declared position.
     let mut items: Vec<(u16, Kind, DataType, u32)> = Vec::new();
-    if let Some(f) = &rl.no_axis_pts_x {
-        items.push((f.position, Kind::NoAxisPts, f.datatype, 1));
-    }
-    if let Some(f) = &rl.axis_pts_x {
-        items.push((f.position, Kind::AxisPts, f.datatype, n_points));
+    for d in 0..n_axes {
+        if let Some(f) = no_axis_pts[d] {
+            items.push((f.position, Kind::NoAxisPts(d), f.datatype, 1));
+        }
+        if let Some(f) = axis_pts[d] {
+            items.push((f.position, Kind::AxisPts(d), f.datatype, points(d)));
+        }
     }
     if let Some(f) = &rl.fnc_values {
-        items.push((f.position, Kind::Fnc, f.datatype, n_points));
+        let total: u32 = (0..n_axes).map(points).product::<u32>().max(points(0));
+        items.push((f.position, Kind::Fnc, f.datatype, total));
     }
     // A rescale axis replaces AXIS_PTS_X with pairs, and brings its own count
     // field and padding.
     if let Some(f) = &rl.no_rescale_x {
-        items.push((f.position, Kind::NoAxisPts, f.datatype, 1));
+        items.push((f.position, Kind::NoAxisPts(0), f.datatype, 1));
     }
     if let Some(f) = &rl.axis_rescale_x {
-        let pairs = n_points.min(u32::from(f.max_number_of_rescale_pairs).max(1));
+        let pairs = points(0).min(u32::from(f.max_number_of_rescale_pairs).max(1));
         items.push((f.position, Kind::Rescale, f.datatype, pairs * 2));
     }
     for r in &rl.reserved {
@@ -319,18 +382,24 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
             .as_ref()
             .map(|f| f.index_mode == a2lfile::IndexMode::ColumnDir)
             .unwrap_or(false),
-        axis_index_decr: rl
-            .axis_pts_x
-            .as_ref()
-            .map(|f| f.index_incr == IndexOrder::IndexDecr)
-            .or_else(|| {
-                rl.axis_rescale_x
-                    .as_ref()
-                    .map(|f| f.index_incr == IndexOrder::IndexDecr)
-            })
-            .unwrap_or(false),
+        axes: vec![AxisLayout::default(); n_axes.max(1)],
         ..Default::default()
     };
+    for (d, slot) in out.axes.iter_mut().enumerate() {
+        slot.index_decr = axis_pts
+            .get(d)
+            .copied()
+            .flatten()
+            .map(|f| f.index_incr == IndexOrder::IndexDecr)
+            .or_else(|| {
+                // A rescale axis carries the order in place of AXIS_PTS_X.
+                rl.axis_rescale_x
+                    .as_ref()
+                    .filter(|_| d == 0)
+                    .map(|f| f.index_incr == IndexOrder::IndexDecr)
+            })
+            .unwrap_or(false);
+    }
 
     let mut offset = 0u32;
     for (_, kind, datatype, count) in items {
@@ -342,8 +411,16 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
         };
         offset += field.size();
         match kind {
-            Kind::NoAxisPts => out.no_axis_pts = Some(field),
-            Kind::AxisPts => out.axis_pts = Some(field),
+            Kind::NoAxisPts(d) => {
+                if let Some(a) = out.axes.get_mut(d) {
+                    a.no_axis_pts = Some(field);
+                }
+            }
+            Kind::AxisPts(d) => {
+                if let Some(a) = out.axes.get_mut(d) {
+                    a.axis_pts = Some(field);
+                }
+            }
             Kind::Fnc => out.fnc = Some(field),
             Kind::Rescale => out.rescale = Some(field),
             // Padding only: it has already advanced the offset above.
@@ -354,17 +431,20 @@ pub fn resolve(rl: &RecordLayout, aligns: &Alignments, n_points: u32) -> Resolve
     out
 }
 
-/// True when the record layout uses any field beyond the X dimension, i.e. the
-/// object is at least two-dimensional.
-pub fn is_multi_dimensional(rl: &RecordLayout) -> bool {
-    rl.axis_pts_y.is_some()
-        || rl.axis_pts_z.is_some()
-        || rl.axis_pts_4.is_some()
-        || rl.axis_pts_5.is_some()
-        || rl.no_axis_pts_y.is_some()
-        || rl.no_axis_pts_z.is_some()
-        || rl.no_axis_pts_4.is_some()
-        || rl.no_axis_pts_5.is_some()
+/// How many dimensions a record layout describes, judged by its axis fields.
+///
+/// The characteristic's `AXIS_DESCR` list is the authority on this; the layout
+/// is consulted only when an object declares fewer axes than its layout stores,
+/// which would otherwise silently under-size the record.
+pub fn layout_axis_count(rl: &RecordLayout) -> usize {
+    let present = [
+        rl.axis_pts_x.is_some() || rl.no_axis_pts_x.is_some() || rl.axis_rescale_x.is_some(),
+        rl.axis_pts_y.is_some() || rl.no_axis_pts_y.is_some(),
+        rl.axis_pts_z.is_some() || rl.no_axis_pts_z.is_some(),
+        rl.axis_pts_4.is_some() || rl.no_axis_pts_4.is_some(),
+        rl.axis_pts_5.is_some() || rl.no_axis_pts_5.is_some(),
+    ];
+    present.iter().rposition(|p| *p).map(|i| i + 1).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -470,12 +550,12 @@ mod tests {
             a2lfile::AddrType::Direct,
         ));
 
-        let resolved = resolve(&rl, &Alignments::default(), 8);
+        let resolved = resolve(&rl, &Alignments::default(), &[8]);
 
-        let count = resolved.no_axis_pts.expect("count field");
+        let count = resolved.no_axis_pts().expect("count field");
         assert_eq!(count.offset, 0);
 
-        let axis = resolved.axis_pts.expect("axis field");
+        let axis = resolved.axis_pts().expect("axis field");
         assert_eq!(axis.offset, 1);
         assert_eq!(axis.size(), 8);
 
@@ -484,7 +564,7 @@ mod tests {
         assert_eq!(fnc.size(), 16);
 
         assert_eq!(resolved.total_size, 26);
-        assert!(resolved.axis_index_decr);
+        assert!(resolved.axis_index_decr());
     }
 
     #[test]
@@ -497,11 +577,11 @@ mod tests {
             a2lfile::AddrType::Direct,
         ));
 
-        let resolved = resolve(&rl, &Alignments::default(), 1);
+        let resolved = resolve(&rl, &Alignments::default(), &[1]);
         let fnc = resolved.fnc.expect("function values");
         assert_eq!(fnc.offset, 0);
         assert_eq!(resolved.total_size, 1);
-        assert!(resolved.axis_pts.is_none());
+        assert!(resolved.axis_pts().is_none());
     }
 
     #[test]
@@ -516,8 +596,8 @@ mod tests {
         ));
         rl.no_axis_pts_x = Some(a2lfile::NoAxisPtsDim::new(1, DataType::Ubyte));
 
-        let resolved = resolve(&rl, &Alignments::default(), 4);
-        assert_eq!(resolved.no_axis_pts.unwrap().offset, 0);
+        let resolved = resolve(&rl, &Alignments::default(), &[4]);
+        assert_eq!(resolved.no_axis_pts().unwrap().offset, 0);
         assert_eq!(resolved.fnc.unwrap().offset, 1);
     }
 }

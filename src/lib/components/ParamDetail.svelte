@@ -106,6 +106,10 @@
   const isEnum   = $derived(!!row?.enum_options);
   const isText    = $derived(row?.category === 'ascii');
   const isVirtual = $derived(row?.category === 'virtual');
+  /** Two or more dimensions: a map, cuboid or cube. */
+  const isMap = $derived(row?.category === 'map');
+  /** `4 x 5`, the shape as a person would say it. */
+  const shape = $derived((detail?.dims ?? row?.dims ?? []).join(' x '));
   /** Characters left before the field is full. */
   const textLeft = $derived(
     isText && row?.text_max_len != null ? row.text_max_len - draft.length : 0
@@ -188,9 +192,14 @@
     }
   }
 
-  /** Pair axis breakpoints with function values for the curve table. */
+  /**
+   * Pair axis breakpoints with function values for the curve table.
+   *
+   * Only meaningful in one dimension: a map holds one breakpoint list per axis
+   * and a grid of values, which this row-by-row pairing cannot represent.
+   */
   const points = $derived.by(() => {
-    if (!detail) return [];
+    if (!detail || isMap) return [];
     const n = Math.max(detail.axis.length, detail.values.length);
     return Array.from({ length: n }, (_, i) => ({
       i,
@@ -357,8 +366,11 @@
               </tr>
             {/if}
           {/if}
+          {#if isMap && shape}
+            <tr><td>Shape</td><td class="v shape">{shape}</td></tr>
+          {/if}
           {#if row.point_count !== null && row.point_count !== undefined}
-            <tr><td>Points</td><td class="v">{row.point_count}</td></tr>
+            <tr><td>{isMap ? 'Values' : 'Points'}</td><td class="v">{row.point_count}</td></tr>
           {/if}
           {#if !isVirtual}
             <tr>
@@ -370,6 +382,37 @@
           {/if}
         </tbody>
       </table>
+
+      <!-- ── Axes of a map, cuboid or cube ── -->
+      {#if isMap && detail?.axes?.length}
+        <div class="sub-header">Axes</div>
+        <div class="points-wrap">
+          <table class="points">
+            <thead>
+              <tr><th class="i">#</th><th>Kind</th><th class="r">Points</th></tr>
+            </thead>
+            <tbody>
+              {#each detail.axes as ax, d}
+                <tr>
+                  <td class="i">{'XYZ45'[d] ?? d + 1}</td>
+                  <td class="ax" title={AXIS_KIND_LABEL[ax.kind] ?? ''}>
+                    {ax.kind}
+                    {#if ax.reference}
+                      <button class="link ref" onclick={() => onNavigate(ax.reference)}
+                              title="Show {ax.reference}">{ax.reference}</button>
+                    {/if}
+                  </td>
+                  <td class="r">{ax.points.length}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <p class="pending">
+          Values decode and encode correctly; the grid editor is not built yet.
+          Use the hex view to inspect the bytes.
+        </p>
+      {/if}
 
       <!-- ── 1D points ── -->
       {#if points.length > 0}
@@ -713,6 +756,19 @@
     letter-spacing: 0;
     font-weight: 400;
     color: var(--c-dim);
+  }
+
+  .shape {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.5px;
+  }
+
+  .pending {
+    font-size: 11px;
+    color: var(--c-muted);
+    margin: 6px 0 0;
+    padding: 0 2px;
+    line-height: 1.45;
   }
 
   .points-wrap { overflow-x: auto; }

@@ -63,6 +63,21 @@ impl CdfxImport {
     }
 }
 
+/// How one decoded point is recorded in a CDFX.
+///
+/// A verbal conversion renders a label, and the label is what the file holds —
+/// the demo's map has a Y axis of `red`, `orange`, … which its own CDFX writes
+/// as `VT` elements. Writing the underlying breakpoint number instead would
+/// name a different thing to every tool that reads it back. A formatted number
+/// still parses as one, so only genuine labels take the text path.
+fn point_value(p: &crate::model::PointValue) -> CdfxValue {
+    if p.display.trim().parse::<f64>().is_ok() {
+        CdfxValue::Num(p.phys)
+    } else {
+        CdfxValue::Text(p.display.clone())
+    }
+}
+
 /// Render a before/after pair so the difference between them is visible.
 ///
 /// The A2L `FORMAT` is the right precision for reading, but a change can be
@@ -140,7 +155,7 @@ pub fn plan_import(db: &A2lDatabase, src: &dyn ByteSource, file: &CdfxFile) -> C
             Category::Scalar | Category::Ascii => {
                 apply_single(db, src, inst, &mut out);
             }
-            Category::Curve => {
+            Category::Curve | Category::Map => {
                 apply_points(db, src, inst, &mut out);
             }
             _ => {}
@@ -227,31 +242,38 @@ fn apply_points(db: &A2lDatabase, src: &dyn ByteSource, inst: &CdfxInstance, out
         );
     }
 
-    // Only an axis stored in this object's own record is written here; a shared
-    // one belongs to the AXIS_PTS object and arrives as its own instance.
-    if !matches!(plan.axis, AxisSource::Internal) {
-        return;
-    }
-    let Some(axis_cont) = inst.axes.first() else { return };
-    if axis_cont.instance_ref.is_some() {
-        return;
-    }
-    if axis_cont.values.len() != detail.axis.len() {
-        if !axis_cont.values.is_empty() {
-            out.skipped.push(CdfxSkip {
-                name: inst.name.clone(),
-                reason: format!(
-                    "file has {} axis points, the object holds {}",
-                    axis_cont.values.len(),
-                    detail.axis.len()
-                ),
-            });
+    // Breakpoints, dimension by dimension. Only an axis stored in this object's
+    // own record is written here; a shared one belongs to its AXIS_PTS object
+    // and arrives as its own instance.
+    for (d, axis_cont) in inst.axes.iter().enumerate() {
+        if axis_cont.instance_ref.is_some() {
+            continue;
         }
-        return;
-    }
-    for (i, incoming) in axis_cont.values.iter().enumerate() {
-        let Some(v) = incoming.as_num() else { continue };
-        push_point(db, src, inst, &detail, PointTarget::Axis, i, v, out);
+        if !matches!(
+            plan.axes.get(d).map(|a| &a.source),
+            Some(AxisSource::Internal)
+        ) {
+            continue;
+        }
+        let held = detail.axes.get(d).map(|a| a.points.len()).unwrap_or(0);
+        if axis_cont.values.len() != held {
+            if !axis_cont.values.is_empty() {
+                out.skipped.push(CdfxSkip {
+                    name: format!("{} axis {d}", inst.name),
+                    reason: format!(
+                        "file has {} axis points, the object holds {held}",
+                        axis_cont.values.len(),
+                    ),
+                });
+            }
+            continue;
+        }
+        for (i, incoming) in axis_cont.values.iter().enumerate() {
+            // A verbal axis records labels; those are the input quantity's
+            // conversion, not a breakpoint this object stores.
+            let Some(v) = incoming.as_num() else { continue };
+            push_point(db, src, inst, &detail, PointTarget::Axis(d), i, v, out);
+        }
     }
 }
 
@@ -275,7 +297,7 @@ fn push_point(
             if differs(src, w.address, &w.bytes) {
                 let now = match target {
                     PointTarget::Value => detail.values.get(i),
-                    PointTarget::Axis => detail.axis.get(i),
+                    PointTarget::Axis(d) => detail.axes.get(d).and_then(|a| a.points.get(i)),
                 };
                 let (current, incoming) = match now {
                     Some(p) => pair(&fmt, p.phys, value),
@@ -284,8 +306,10 @@ fn push_point(
                 out.changes.push(CdfxChange {
                     name: inst.name.clone(),
                     target: match target {
-                        PointTarget::Value => "value".into(),
-                        PointTarget::Axis => "axis".into(),
+                        PointTarget::Value => "value".to_string(),
+                        // One axis needs no qualifier; a map's do.
+                        PointTarget::Axis(0) => "axis".to_string(),
+                        PointTarget::Axis(d) => format!("axis {d}"),
                     },
                     index: Some(i as u32),
                     current,
@@ -348,56 +372,65 @@ pub fn export(db: &A2lDatabase, src: &dyn ByteSource) -> Vec<CdfxInstance> {
                 });
             }
 
-            Category::Curve => {
+            Category::Curve | Category::Map => {
                 let Some(detail) = decode::detail_for(db, src, &name) else {
                     continue;
                 };
-                let values = detail
-                    .values
-                    .iter()
-                    .map(|p| CdfxValue::Num(p.phys))
-                    .collect();
+                let values = detail.values.iter().map(point_value).collect();
 
                 // The A2L kind decides how the shape is named: a standalone
                 // axis object is an axis, a characteristic without one is an
-                // array rather than a curve.
-                let category = match (kind, plan.layout.rescale.is_some(), &plan.axis) {
+                // array rather than a curve, and anything with two or more
+                // axes is named for how many it has.
+                let category = match (kind, plan.layout.rescale.is_some(), plan.axes.len()) {
                     (ObjKind::AxisPts, true, _) => "RES_AXIS",
                     (ObjKind::AxisPts, false, _) => "COM_AXIS",
-                    (_, _, AxisSource::None) => "VAL_BLK",
-                    _ => "CURVE",
+                    (_, _, 0) => "VAL_BLK",
+                    (_, _, 1) => "CURVE",
+                    (_, _, 2) => "MAP",
+                    (_, _, 3) => "CUBOID",
+                    (_, _, 4) => "CUBE_4",
+                    _ => "CUBE_5",
                 };
 
-                let mut axes = Vec::new();
-                match &plan.axis {
-                    AxisSource::Internal | AxisSource::Fixed(_) => {
-                        if !detail.axis.is_empty() {
-                            axes.push(CdfxAxis {
-                                category: plan.axis_kind.to_string(),
-                                values: detail
-                                    .axis
-                                    .iter()
-                                    .map(|p| CdfxValue::Num(p.phys))
-                                    .collect(),
-                                instance_ref: None,
-                            });
+                // One SW-AXIS-CONT per dimension, holding either the
+                // breakpoints or a reference to the object that owns them.
+                let axes = plan
+                    .axes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(d, spec)| {
+                        let kind = spec.kind.to_string();
+                        match &spec.source {
+                            AxisSource::Internal | AxisSource::Fixed(_) => {
+                                let points = detail.axes.get(d)?;
+                                (!points.points.is_empty()).then(|| CdfxAxis {
+                                    category: kind,
+                                    values: points.points.iter().map(point_value).collect(),
+                                    instance_ref: None,
+                                })
+                            }
+                            AxisSource::AxisPts(r) | AxisSource::CurveRef(r) => Some(CdfxAxis {
+                                category: kind,
+                                values: vec![],
+                                instance_ref: Some(r.clone()),
+                            }),
+                            AxisSource::None => None,
                         }
-                    }
-                    AxisSource::AxisPts(r) | AxisSource::CurveRef(r) => {
-                        axes.push(CdfxAxis {
-                            category: plan.axis_kind.to_string(),
-                            values: vec![],
-                            instance_ref: Some(r.clone()),
-                        });
-                    }
-                    AxisSource::None => {}
-                }
+                    })
+                    .collect();
 
                 out.push(CdfxInstance {
                     name,
                     category: category.into(),
                     values,
-                    array_size: plan.matrix_dims.clone(),
+                    // Only a genuinely multi-dimensional object needs its shape
+                    // spelled out; a flat list is unambiguous without it.
+                    array_size: if detail.dims.len() > 1 {
+                        detail.dims.clone()
+                    } else {
+                        Vec::new()
+                    },
                     axes,
                 });
             }

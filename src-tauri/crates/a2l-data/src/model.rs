@@ -60,10 +60,14 @@ pub enum Category {
     Curve,
     /// A fixed-width character array (A2L `ASCII`).
     Ascii,
+    /// Two or more dimensions: `MAP`, `CUBOID`, `CUBE_4` or `CUBE_5`. Values
+    /// are held flat in row-major order, with `dims` giving the shape.
+    Map,
     /// A2L `VIRTUAL_CHARACTERISTIC`: computed from other parameters by a
     /// formula and never stored, so its declared address is a placeholder.
     Virtual,
-    /// Recognised but not decodable in this milestone (maps, cuboids, formulas).
+    /// Recognised but not decodable: an unresolvable conversion or record
+    /// layout, or a shape this crate does not model.
     Unsupported,
 }
 
@@ -129,6 +133,9 @@ pub struct ParamRow {
     pub text_max_len: Option<u32>,
     /// For 1D objects: point count.
     pub point_count: Option<u32>,
+    /// Element counts per dimension, X first. Length 1 for anything flat, so
+    /// `dims.len() > 1` is what marks a row as a map.
+    pub dims: Vec<u32>,
     pub lower_limit: f64,
     pub upper_limit: f64,
     /// True when a physical value can be written back.
@@ -145,16 +152,40 @@ pub struct PointValue {
     pub display: String,
 }
 
-/// Full detail for a 1D object, fetched on selection.
+/// One dimension's breakpoints, as presented.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AxisDetail {
+    /// Breakpoints in presentation order.
+    pub points: Vec<PointValue>,
+    pub unit: String,
+    /// `STD_AXIS`, `COM_AXIS`, `FIX_AXIS`, `RES_AXIS` or `CURVE_AXIS`.
+    pub kind: String,
+    /// The object holding these points, when they live elsewhere.
+    pub reference: Option<String>,
+    /// Whether these breakpoints can be written through this object.
+    pub editable: bool,
+}
+
+/// Full detail for one object, fetched on selection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParamDetail {
     pub name: String,
     pub description: String,
     pub address: u32,
     pub byte_size: u32,
-    /// Axis breakpoints; empty for a value block with no axis.
+    /// Axis breakpoints of the X axis; empty for a value block with no axis.
+    ///
+    /// Retained alongside [`axes`](Self::axes) because the one-dimensional
+    /// point table is driven by it directly; for a map it is `axes[0]`.
     pub axis: Vec<PointValue>,
+    /// Function values, flat, in row-major presentation order — the first
+    /// dimension varies fastest, matching how a CDFX writes them.
     pub values: Vec<PointValue>,
+    /// Element counts per dimension, X first. `[n]` for a curve, `[nx, ny]`
+    /// for a map. Its product is `values.len()`.
+    pub dims: Vec<u32>,
+    /// Every axis the object declares, X first. Empty for a value block.
+    pub axes: Vec<AxisDetail>,
     pub axis_unit: String,
     pub value_unit: String,
     /// The AXIS_DESCR attribute keyword — `STD_AXIS`, `COM_AXIS`, `FIX_AXIS`,
@@ -187,6 +218,8 @@ pub struct CoverageStats {
     pub total_objects: usize,
     pub scalars: usize,
     pub curves: usize,
+    /// Two-or-more-dimensional objects: maps, cuboids and cubes.
+    pub maps: usize,
     pub strings: usize,
     /// Computed parameters. Counted apart from the presence tallies below,
     /// which only describe objects that are meant to occupy image bytes.

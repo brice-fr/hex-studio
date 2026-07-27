@@ -322,11 +322,12 @@ fn decode_ascii(bytes: &[u8]) -> AsciiField {
     }
 }
 
-/// The point count actually in use: the stored count when the layout has one,
-/// clamped to the allocation.
-pub(crate) fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
-    let declared = plan.declared_points;
-    let (Some(field), Some(bytes)) = (plan.layout.no_axis_pts, bytes) else {
+/// The points in use along one dimension: the stored count when the layout has
+/// a NO_AXIS_PTS field for it, clamped to the allocation.
+pub(crate) fn effective_dim(plan: &ObjectPlan, d: usize, bytes: Option<&[u8]>) -> u32 {
+    let declared = plan.dims.get(d).copied().unwrap_or(plan.declared_points);
+    let field = plan.layout.axes.get(d).and_then(|a| a.no_axis_pts);
+    let (Some(field), Some(bytes)) = (field, bytes) else {
         return declared;
     };
     let start = field.offset as usize;
@@ -337,6 +338,18 @@ pub(crate) fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
         Some(n) if n >= 0.0 => (n as u32).min(declared),
         _ => declared,
     }
+}
+
+/// Points in use along every dimension.
+pub(crate) fn effective_dims(plan: &ObjectPlan, bytes: Option<&[u8]>) -> Vec<u32> {
+    (0..plan.dims.len().max(1))
+        .map(|d| effective_dim(plan, d, bytes))
+        .collect()
+}
+
+/// The total element count in use — the product across dimensions.
+pub(crate) fn effective_points(plan: &ObjectPlan, bytes: Option<&[u8]>) -> u32 {
+    effective_dims(plan, bytes).iter().product()
 }
 
 /// Build one table row for an object.
@@ -360,6 +373,7 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
     let mut text_capacity = None;
     let mut text_max_len = None;
     let mut ascii_printable = false;
+    let dims = effective_dims(plan, bytes.as_deref());
 
     match plan.category {
         Category::Scalar => {
@@ -430,10 +444,13 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
             }
         }
 
-        Category::Curve => {
+        // A map summarises the same way a curve does — the span of its values
+        // — with its shape carried alongside in `dims` rather than squeezed
+        // into the display string.
+        Category::Curve | Category::Map => {
             let n = effective_points(plan, bytes.as_deref());
             point_count = Some(n);
-            if let (Some(bytes), Some(field)) = (&bytes, plan.layout.fnc.or(plan.layout.axis_pts)) {
+            if let (Some(bytes), Some(field)) = (&bytes, plan.layout.fnc.or(plan.layout.axis_pts())) {
                 let used = Field { count: n, ..field };
                 let values = read_field(bytes, used, plan.endian);
                 let phys: Vec<f64> = values
@@ -444,7 +461,7 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
                     })
                     .collect();
                 if phys.is_empty() {
-                    display = format!("{n} pts");
+                    display = shape_label(&dims, n);
                 } else {
                     let lo = phys.iter().cloned().fold(f64::INFINITY, f64::min);
                     let hi = phys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -459,7 +476,7 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
             } else if presence == Presence::Absent {
                 display = "absent".into();
             } else {
-                display = format!("{n} pts");
+                display = shape_label(&dims, n);
             }
         }
 
@@ -547,7 +564,7 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
         byte_size: plan.byte_size(),
         datatype: plan
             .datatype()
-            .or_else(|| plan.layout.axis_pts.map(|f| f.datatype))
+            .or_else(|| plan.layout.axis_pts().map(|f| f.datatype))
             .map(layout::datatype_name)
             .unwrap_or("—")
             .to_string(),
@@ -568,6 +585,7 @@ pub fn row_for(db: &A2lDatabase, src: &dyn ByteSource, plan: &ObjectPlan) -> Par
         text_capacity,
         text_max_len,
         point_count,
+        dims,
         lower_limit: plan.lower_limit,
         upper_limit: plan.upper_limit,
         editable,
@@ -590,18 +608,51 @@ pub fn list_rows(
 
 /// Full axis and value arrays for one 1D object.
 /// Reorder a storage-order array into presentation order.
-fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan) -> Vec<T> {
+///
+/// `dims` is the shape actually in use, which for a layout carrying a
+/// NO_AXIS_PTS field can be smaller than the declared allocation.
+fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan, dims: &[u32]) -> Vec<T> {
     let n = stored.len() as u32;
+    if dims.iter().product::<u32>() != n {
+        // The shape does not describe what was read; leaving it in storage
+        // order is wrong but recoverable, whereas indexing past the end is not.
+        return stored;
+    }
     (0..n)
         .map(|i| stored[plan.storage_slot(i, n) as usize].clone())
         .collect()
+}
+
+/// How a multi-dimensional object is labelled when there is nothing to
+/// summarise: `4 x 5` rather than a bare element count, since the shape is the
+/// interesting part and 20 alone says nothing.
+fn shape_label(dims: &[u32], n: u32) -> String {
+    if dims.len() > 1 {
+        dims.iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(" x ")
+    } else {
+        format!("{n} pts")
+    }
+}
+
+/// Present an array in the opposite order when its axis is stored INDEX_DECR.
+fn reverse_if<T>(v: Vec<T>, reversed: bool) -> Vec<T> {
+    if reversed {
+        v.into_iter().rev().collect()
+    } else {
+        v
+    }
 }
 
 pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<ParamDetail> {
     let plan = db.plan_any(name)?;
     let size = plan.byte_size();
     let bytes = src.read(plan.address, size).unwrap_or_default();
-    let n = effective_points(&plan, if bytes.is_empty() { None } else { Some(&bytes) });
+    let readable = if bytes.is_empty() { None } else { Some(bytes.as_slice()) };
+    let dims = effective_dims(&plan, readable);
+    let n: u32 = dims.iter().product();
     let fmt = plan.format().to_string();
     // Points can only be written when the whole object is present — a partial
     // read would put an edit at an address whose neighbours are unknown.
@@ -664,11 +715,20 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             &crate::convert::Conversion::Identical,
             "",
         );
+        let pairs = axis.len() as u32;
         return Some(ParamDetail {
             name: plan.name.clone(),
             description: plan.description.clone(),
             address: plan.address,
             byte_size: size,
+            axes: vec![crate::model::AxisDetail {
+                points: axis.clone(),
+                unit: plan.display_unit().to_string(),
+                kind: "RES_AXIS".to_string(),
+                reference: None,
+                editable: editable_points,
+            }],
+            dims: vec![pairs],
             axis,
             values,
             axis_unit: plan.display_unit().to_string(),
@@ -682,7 +742,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
     }
 
     // Function values.
-    let values = match plan.layout.fnc.or(plan.layout.axis_pts) {
+    let values = match plan.layout.fnc.or(plan.layout.axis_pts()) {
         Some(field) if !bytes.is_empty() => {
             let used = Field { count: n, ..field };
             to_points(read_field(&bytes, used, plan.endian), &plan.conv.conversion, &fmt)
@@ -690,82 +750,92 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         _ => Vec::new(),
     };
 
-    // Axis breakpoints, from wherever this object keeps them.
-    let axis_conv = plan.axis_conv.clone();
-    let axis_fmt = axis_conv.as_ref().map(|c| c.format.clone()).unwrap_or_default();
-    let axis = match &plan.axis {
-        AxisSource::Internal => match plan.layout.axis_pts {
-            Some(field) if !bytes.is_empty() => {
-                let used = Field { count: n, ..field };
-                let raws = read_field(&bytes, used, plan.endian);
-                let conv = axis_conv
-                    .as_ref()
-                    .map(|c| c.conversion.clone())
-                    .unwrap_or(crate::convert::Conversion::Identical);
-                to_points(raws, &conv, &axis_fmt)
+    // Axis breakpoints, one dimension at a time, from wherever each keeps them.
+    let mut axes: Vec<crate::model::AxisDetail> = Vec::with_capacity(plan.axes.len());
+    for (d, spec) in plan.axes.iter().enumerate() {
+        let conv = spec
+            .conv
+            .as_ref()
+            .map(|c| c.conversion.clone())
+            .unwrap_or(crate::convert::Conversion::Identical);
+        let axis_fmt = spec.conv.as_ref().map(|c| c.format.clone()).unwrap_or_default();
+        let count = dims.get(d).copied().unwrap_or(0);
+
+        let stored = match &spec.source {
+            AxisSource::Internal => {
+                match plan.layout.axes.get(d).and_then(|a| a.axis_pts) {
+                    Some(field) if !bytes.is_empty() => {
+                        let used = Field { count, ..field };
+                        to_points(read_field(&bytes, used, plan.endian), &conv, &axis_fmt)
+                    }
+                    _ => Vec::new(),
+                }
             }
-            _ => Vec::new(),
-        },
-        // A shared axis lives in its own AXIS_PTS object, where the breakpoints
-        // are the axis field.
-        AxisSource::AxisPts(axis_name) => db
-            .plan_axis_pts(axis_name)
-            .map(|ap| {
-                let field = ap.layout.axis_pts.or(ap.layout.fnc);
-                points_from(&ap, field)
-            })
-            .unwrap_or_default(),
+            // A shared axis lives in its own AXIS_PTS object, where the
+            // breakpoints are the axis field.
+            AxisSource::AxisPts(axis_name) => db
+                .plan_axis_pts(axis_name)
+                .map(|ap| {
+                    let field = ap.layout.axis_pts().or(ap.layout.fnc);
+                    points_from(&ap, field)
+                })
+                .unwrap_or_default(),
+            // CURVE_AXIS borrows another characteristic's *function* values as
+            // its breakpoints, so the preferred field is the other way round.
+            AxisSource::CurveRef(curve_name) => db
+                .plan_characteristic(curve_name)
+                .map(|cv| {
+                    let field = cv.layout.fnc.or(cv.layout.axis_pts());
+                    points_from(&cv, field)
+                })
+                .unwrap_or_default(),
+            AxisSource::Fixed(values) => to_points(values.clone(), &conv, &axis_fmt),
+            AxisSource::None => Vec::new(),
+        };
 
-        // CURVE_AXIS borrows another characteristic's *function* values as its
-        // breakpoints, so the preferred field is the other way round.
-        AxisSource::CurveRef(curve_name) => db
-            .plan_characteristic(curve_name)
-            .map(|cv| {
-                let field = cv.layout.fnc.or(cv.layout.axis_pts);
-                points_from(&cv, field)
-            })
-            .unwrap_or_default(),
-        AxisSource::Fixed(values) => {
-            let conv = axis_conv
-                .as_ref()
-                .map(|c| c.conversion.clone())
-                .unwrap_or(crate::convert::Conversion::Identical);
-            to_points(values.clone(), &conv, &axis_fmt)
-        }
-        AxisSource::None => Vec::new(),
-    };
+        // Only breakpoints held in this object's own record can be written
+        // here; a shared one is edited on its own object, a computed one not
+        // at all.
+        let editable = editable_points
+            && matches!(spec.source, AxisSource::Internal)
+            && conv.is_invertible();
 
-    // Everything above was read in storage order. An INDEX_DECR axis is stored
-    // highest-first, and the function values sit alongside it element by
-    // element, so presenting the axis ascending means reversing *both* — the
-    // CDFX for this file pairs axis -5 with value -3, which is the last stored
-    // element of each. Reversing only the axis silently mispairs every point.
-    // A COLUMN_DIR matrix is likewise stored transposed. `storage_slot` knows
-    // about both, so gathering through it is all either case needs.
-    let axis = gather(axis, &plan);
-    let values = gather(values, &plan);
+        axes.push(crate::model::AxisDetail {
+            points: reverse_if(stored, plan.dim_reversed(d)),
+            unit: spec.conv.as_ref().map(|c| c.unit.clone()).unwrap_or_default(),
+            kind: spec.kind.to_string(),
+            reference: spec.source.reference().map(str::to_string),
+            editable,
+        });
+    }
+
+    // Function values were read in storage order. An INDEX_DECR axis is stored
+    // highest-first and its values sit alongside it element by element, so
+    // presenting the axis ascending drags the values with it — the CDFX for
+    // this file pairs axis -5 with value -3, the last stored element of each,
+    // and reversing only the axis mispairs every point. A COLUMN_DIR grid is
+    // likewise stored transposed. `storage_slot` knows about both, and about
+    // the two combined, so gathering through it covers every case.
+    let values = gather(values, &plan, &dims);
+    let axis = axes.first().map(|a| a.points.clone()).unwrap_or_default();
 
     Some(ParamDetail {
         name: plan.name.clone(),
         description: plan.description.clone(),
         address: plan.address,
         byte_size: size,
+        // The X axis is mirrored out of `axes` so the one-dimensional point
+        // table can keep reading it directly.
+        axis_unit: axes.first().map(|a| a.unit.clone()).unwrap_or_default(),
+        axis_kind: axes.first().map(|a| a.kind.clone()).unwrap_or_default(),
+        axis_ref: axes.first().and_then(|a| a.reference.clone()),
+        axis_editable: axes.first().map(|a| a.editable).unwrap_or(false),
         axis,
         values,
-        axis_unit: axis_conv.map(|c| c.unit).unwrap_or_default(),
+        dims,
+        axes,
         value_unit: plan.display_unit().to_string(),
-        axis_kind: plan.axis_kind.to_string(),
-        axis_ref: plan.axis.reference().map(str::to_string),
         values_editable: editable_points && plan.conv.conversion.is_invertible(),
-        // Only an axis stored in this object's own record can be written here;
-        // a shared or computed one is edited elsewhere, or not at all.
-        axis_editable: editable_points
-            && matches!(plan.axis, AxisSource::Internal)
-            && plan
-                .axis_conv
-                .as_ref()
-                .map(|c| c.conversion.is_invertible())
-                .unwrap_or(false),
         bytes,
     })
 }

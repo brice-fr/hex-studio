@@ -84,6 +84,61 @@ impl AxisSource {
     }
 }
 
+/// Split a flat presentation index into per-dimension subscripts, first
+/// dimension varying fastest — the order a CDFX writes and a grid reads.
+///
+/// Returns `None` when the index does not fit the shape.
+fn unpack(index: u32, dims: &[u32]) -> Option<Vec<u32>> {
+    if dims.is_empty() || dims.contains(&0) {
+        return None;
+    }
+    let mut rest = index;
+    let mut subs = Vec::with_capacity(dims.len());
+    for d in dims {
+        subs.push(rest % d);
+        rest /= d;
+    }
+    (rest == 0).then_some(subs)
+}
+
+/// Recombine subscripts into a storage slot.
+///
+/// `ROW_DIR` walks X fastest, which is the order the subscripts came apart in.
+/// `COLUMN_DIR` walks Y fastest — and *only* swaps X with Y: any dimension
+/// beyond the second stays stacked exactly as it was, because row versus column
+/// is a statement about the plane, not about the whole array.
+///
+/// The demo file settles this. Its `ASAM.C.CUBOID.COLUMN_DIR` is a 2x3x4 twin
+/// of `ASAM.C.CUBOID.ROW_DIR` holding the same 1..24, stored as
+/// `1,3,5,2,4,6,7,9,11,…`. Swapping X and Y recovers 1..24; reversing the full
+/// dimension order yields `1,13,4,16,11,…`, which is not the twin's content and
+/// not what the shipped CDFX records.
+fn pack(subs: &[u32], dims: &[u32], column_dir: bool) -> u32 {
+    let mut order: Vec<usize> = (0..dims.len()).collect();
+    if column_dir && dims.len() >= 2 {
+        order.swap(0, 1);
+    }
+    let mut slot = 0;
+    let mut stride = 1;
+    for &d in &order {
+        slot += subs[d] * stride;
+        stride *= dims[d];
+    }
+    slot
+}
+
+/// One dimension of an object: where its breakpoints come from and how to
+/// present them.
+#[derive(Debug, Clone)]
+pub struct AxisSpec {
+    pub source: AxisSource,
+    pub conv: Option<ConvInfo>,
+    /// The AXIS_DESCR attribute keyword, for display.
+    pub kind: &'static str,
+    /// Breakpoints along this dimension.
+    pub points: u32,
+}
+
 /// Everything needed to decode, encode or measure one A2L object.
 #[derive(Debug, Clone)]
 pub struct ObjectPlan {
@@ -94,27 +149,27 @@ pub struct ObjectPlan {
     pub address: u32,
     pub layout: ResolvedLayout,
     pub conv: ConvInfo,
-    pub axis_conv: Option<ConvInfo>,
-    pub axis: AxisSource,
-    /// The AXIS_DESCR attribute keyword, for display. Empty when there is none.
-    pub axis_kind: &'static str,
+    /// One entry per declared AXIS_DESCR, X first. Empty for a scalar, a
+    /// VAL_BLK, or a standalone AXIS_PTS object, none of which has an axis of
+    /// its own.
+    pub axes: Vec<AxisSpec>,
     /// A2L `BIT_MASK`: the bits of the stored word this object occupies.
     /// 0 means the whole word, which is also the default.
     pub bit_mask: u64,
     /// For a VIRTUAL_CHARACTERISTIC: the formula and the parameters it reads.
     pub virtual_formula: Option<String>,
     pub virtual_inputs: Vec<String>,
-    /// True when the governing axis is stored INDEX_DECR, so presentation order
-    /// is the reverse of storage order.
+    /// Element counts per dimension, X first: `[1]` for a scalar, `[n]` for a
+    /// curve or axis, `[nx, ny]` for a map. The function values span the
+    /// product, and this is what indexes them.
+    pub dims: Vec<u32>,
+    /// Per-dimension INDEX_DECR, aligned with `dims`.
     ///
-    /// Function values correspond to axis points element by element in *storage*
-    /// order, so an axis shown ascending requires its values reversed to match.
-    /// For a COM_AXIS the order is a property of the referenced AXIS_PTS object
-    /// rather than of the curve's own record layout.
-    pub display_reversed: bool,
-    /// `MATRIX_DIM`, first dimension first. Empty for anything but a
-    /// multi-dimensional VAL_BLK.
-    pub matrix_dims: Vec<u32>,
+    /// An axis stored highest-first is presented ascending, and the function
+    /// values sit alongside it element by element — so presentation order
+    /// reverses *along that dimension only*. For a COM_AXIS the order belongs
+    /// to the referenced AXIS_PTS object rather than to this record layout.
+    pub dims_reversed: Vec<bool>,
     pub endian: Endian,
     pub lower_limit: f64,
     pub upper_limit: f64,
@@ -136,53 +191,81 @@ impl ObjectPlan {
 }
 
 impl ObjectPlan {
+    /// The X axis, which is the only one anything below a MAP has.
+    pub fn axis(&self) -> &AxisSource {
+        self.axes
+            .first()
+            .map(|a| &a.source)
+            .unwrap_or(&AxisSource::None)
+    }
+
+    /// The X axis's conversion.
+    pub fn axis_conv(&self) -> Option<&ConvInfo> {
+        self.axes.first().and_then(|a| a.conv.as_ref())
+    }
+
+    /// The X axis's AXIS_DESCR keyword, empty when there is no axis.
+    pub fn axis_kind(&self) -> &'static str {
+        self.axes.first().map(|a| a.kind).unwrap_or("")
+    }
+
+    /// Whether presentation reverses along dimension `d`.
+    pub fn dim_reversed(&self, d: usize) -> bool {
+        self.dims_reversed.get(d).copied().unwrap_or(false)
+    }
+
     /// Where the element shown at `index` actually lives in the record.
     ///
-    /// Two things can put presentation order at odds with storage order:
+    /// Three things can put presentation order at odds with storage order, and
+    /// all of them are subscript arithmetic once the flat index is unpacked:
     ///
-    /// * `INDEX_DECR`, which stores an axis highest-first — see
-    ///   [`display_reversed`](Self::display_reversed);
-    /// * `COLUMN_DIR` on a multi-dimensional `VAL_BLK`, which stores the matrix
-    ///   transposed. A CDFX writes such a block row by row, and the ASAM demo
-    ///   file holds the same 3x4 matrix twice, once each way, to make the point:
-    ///   read linearly, the `COLUMN_DIR` copy comes out `1,4,7,10,2,…` where the
-    ///   `ROW_DIR` copy comes out `1,2,3,…`.
+    /// * `INDEX_DECR`, which stores an axis highest-first. The function values
+    ///   sit alongside their breakpoints element by element, so an axis shown
+    ///   ascending drags its values with it — but *only along that axis*.
+    ///   Reversing the whole flat array happens to be right in one dimension
+    ///   and is wrong in two.
+    /// * `COLUMN_DIR`, which stores the grid transposed. A CDFX writes it row
+    ///   by row, and the demo file holds the same 3x4 block twice, once each
+    ///   way, to make the point: read linearly the `COLUMN_DIR` copy comes out
+    ///   `1,4,7,10,2,…` where its `ROW_DIR` twin comes out `1,2,3,…`.
+    /// * Both at once, which a map with a decreasing Y axis really does.
     ///
     /// `count` is the number of elements in the field being indexed, which for
     /// a rescale axis is not the same as the object's point count.
     pub fn storage_slot(&self, index: u32, count: u32) -> u32 {
-        let index = self.transpose(index);
-        if self.display_reversed && count > 0 {
+        let dims = self.effective_dims(count);
+        let Some(mut subs) = unpack(index, &dims) else {
+            // Out of range for the declared shape; leave it to the caller's
+            // bounds check rather than inventing a slot.
+            return index;
+        };
+        for (d, s) in subs.iter_mut().enumerate() {
+            if self.dim_reversed(d) {
+                *s = dims[d] - 1 - *s;
+            }
+        }
+        pack(&subs, &dims, self.layout.fnc_column_dir)
+    }
+
+    /// Where breakpoint `index` of dimension `d` lives in that axis's field.
+    pub fn axis_slot(&self, d: usize, index: u32, count: u32) -> u32 {
+        if self.dim_reversed(d) && count > 0 && index < count {
             count - 1 - index
         } else {
             index
         }
     }
 
-    /// Map a row-major index onto its column-major slot, when the layout calls
-    /// for it. Identity for everything else, which is nearly everything.
-    fn transpose(&self, index: u32) -> u32 {
-        if !self.layout.fnc_column_dir || self.matrix_dims.len() < 2 {
-            return index;
+    /// The grid to index, falling back to a flat run when the declared
+    /// dimensions do not account for the field being addressed — a rescale
+    /// axis, or an object whose MATRIX_DIM disagrees with its record layout.
+    fn effective_dims(&self, count: u32) -> Vec<u32> {
+        let declared: u32 = self.dims.iter().product();
+        if !self.dims.is_empty() && declared == count {
+            self.dims.clone()
+        } else {
+            vec![count]
         }
-        // Decompose with the first dimension varying fastest — the order a CDFX
-        // and the data view both present — then recompose with the last one
-        // varying fastest, which is how COLUMN_DIR stores it.
-        let dims = &self.matrix_dims;
-        let mut rest = index;
-        let mut subscripts = Vec::with_capacity(dims.len());
-        for d in dims {
-            subscripts.push(rest % d);
-            rest /= d;
-        }
-        if rest != 0 {
-            return index; // out of range; leave it to the caller's bounds check
-        }
-        let mut slot = subscripts[0];
-        for i in 1..dims.len() {
-            slot = slot * dims[i] + subscripts[i];
-        }
-        slot
     }
 
     /// Total bytes the object occupies in the image.
@@ -439,9 +522,11 @@ impl A2lDatabase {
         // even meaningful.
         let (mut category, mut note) = classify_characteristic(ch, rl);
 
-        let declared_points = characteristic_point_count(ch, category);
+        let axes = self.axis_specs(ch, category);
+        let dims = self.characteristic_dims(ch, category, rl, &axes);
+        let declared_points: u32 = dims.iter().product();
         let layout = match rl {
-            Some(rl) => layout::resolve(rl, &self.aligns, declared_points),
+            Some(rl) => layout::resolve(rl, &self.aligns, &dims),
             None => {
                 note = Some(format!("RECORD_LAYOUT '{}' not found", ch.deposit));
                 category = Category::Unsupported;
@@ -459,12 +544,17 @@ impl A2lDatabase {
             }
         }
 
-        let (axis, axis_conv, axis_kind) = self.axis_source(ch, category);
-        let display_reversed = match &axis {
-            AxisSource::Internal => layout.axis_index_decr,
-            AxisSource::AxisPts(n) => self.axis_pts_is_decreasing(n),
-            _ => false,
-        };
+        // Presentation order per dimension. STD_AXIS order lives in this
+        // record layout; a shared axis carries its own.
+        let dims_reversed: Vec<bool> = (0..dims.len())
+            .map(|d| match axes.get(d).map(|a| &a.source) {
+                Some(AxisSource::Internal) => {
+                    layout.axes.get(d).map(|a| a.index_decr).unwrap_or(false)
+                }
+                Some(AxisSource::AxisPts(n)) => self.axis_pts_is_decreasing(n),
+                _ => false,
+            })
+            .collect();
 
         Some(ObjectPlan {
             name: name.to_string(),
@@ -474,9 +564,7 @@ impl A2lDatabase {
             address: ch.address,
             layout,
             conv,
-            axis_conv,
-            axis,
-            axis_kind,
+            axes,
             bit_mask: ch.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
             virtual_formula: ch.virtual_characteristic.as_ref().map(|v| v.formula.clone()),
             virtual_inputs: ch
@@ -484,8 +572,8 @@ impl A2lDatabase {
                 .as_ref()
                 .map(|v| v.characteristic_list.clone())
                 .unwrap_or_default(),
-            display_reversed,
-            matrix_dims: matrix_dims(ch),
+            dims,
+            dims_reversed,
             endian,
             lower_limit: ch.lower_limit,
             upper_limit: ch.upper_limit,
@@ -511,8 +599,8 @@ impl A2lDatabase {
 
         let (category, note, layout) = match rl {
             Some(rl) => {
-                let resolved = layout::resolve(rl, &self.aligns, declared_points);
-                if resolved.axis_pts.is_none()
+                let resolved = layout::resolve(rl, &self.aligns, &[declared_points]);
+                if resolved.axis_pts().is_none()
                     && resolved.fnc.is_none()
                     && resolved.rescale.is_none()
                 {
@@ -531,7 +619,9 @@ impl A2lDatabase {
                 ResolvedLayout::default(),
             ),
         };
-        let display_reversed = layout.axis_index_decr;
+        // The object *is* an axis, so its own INDEX_DECR governs how its
+        // points are presented even though it has no AXIS_DESCR of its own.
+        let dims_reversed = vec![layout.axis_index_decr()];
 
         Some(ObjectPlan {
             name: name.to_string(),
@@ -541,15 +631,13 @@ impl A2lDatabase {
             address: ap.address,
             layout,
             conv,
-            axis_conv: None,
-            axis: AxisSource::None,
-            axis_kind: "",
+            axes: Vec::new(),
             // AXIS_PTS carries no BIT_MASK.
             bit_mask: 0,
             virtual_formula: None,
             virtual_inputs: Vec::new(),
-            display_reversed,
-            matrix_dims: Vec::new(),
+            dims: vec![declared_points],
+            dims_reversed,
             endian,
             lower_limit: ap.lower_limit,
             upper_limit: ap.upper_limit,
@@ -605,14 +693,12 @@ impl A2lDatabase {
             address,
             layout,
             conv,
-            axis_conv: None,
-            axis: AxisSource::None,
-            axis_kind: "",
+            axes: Vec::new(),
             bit_mask: m.bit_mask.as_ref().map(|b| b.mask).unwrap_or(0),
             virtual_formula: None,
             virtual_inputs: Vec::new(),
-            display_reversed: false,
-            matrix_dims: Vec::new(),
+            dims: vec![1],
+            dims_reversed: vec![false],
             endian,
             lower_limit: m.lower_limit,
             upper_limit: m.upper_limit,
@@ -622,40 +708,101 @@ impl A2lDatabase {
         })
     }
 
-    /// Determine where a characteristic's axis lives, and how to convert it.
-    fn axis_source(
+    /// Resolve every AXIS_DESCR into where its breakpoints live and how many
+    /// there are.
+    fn axis_specs(&self, ch: &Characteristic, category: Category) -> Vec<AxisSpec> {
+        if !matches!(category, Category::Curve | Category::Map) {
+            return Vec::new();
+        }
+        ch.axis_descr
+            .iter()
+            .take(layout::MAX_AXES)
+            .map(|descr| {
+                use a2lfile::AxisDescrAttribute as A;
+                let (source, kind) = match descr.attribute {
+                    A::StdAxis => (AxisSource::Internal, "STD_AXIS"),
+                    // COM_AXIS and RES_AXIS share an AXIS_PTS object…
+                    A::ComAxis => (axis_pts_ref(descr), "COM_AXIS"),
+                    A::ResAxis => (axis_pts_ref(descr), "RES_AXIS"),
+                    // …whereas CURVE_AXIS borrows another curve's values
+                    // through a different field entirely.
+                    A::CurveAxis => (
+                        descr
+                            .curve_axis_ref
+                            .as_ref()
+                            .map(|r| AxisSource::CurveRef(r.curve_axis.clone()))
+                            .unwrap_or(AxisSource::None),
+                        "CURVE_AXIS",
+                    ),
+                    A::FixAxis => (AxisSource::Fixed(fixed_axis_values(descr)), "FIX_AXIS"),
+                };
+                let points = self.axis_point_count(descr, &source);
+                AxisSpec {
+                    source,
+                    conv: Some(self.conversion_for(&descr.conversion)),
+                    kind,
+                    points,
+                }
+            })
+            .collect()
+    }
+
+    /// How many breakpoints one dimension really has.
+    ///
+    /// `max_axis_points` on the AXIS_DESCR is only the declaration's own
+    /// estimate. When the axis lives in a shared AXIS_PTS object that object's
+    /// allocation wins — the demo A2L spells this out on
+    /// `ASAM.C.MAP.COM_AXIS.FIX_AXIS`, whose descriptor says 8 with the comment
+    /// that it "will be overwritten by max number of axis points of AXIS_PTS".
+    /// Believing the descriptor there would mis-size the function values and
+    /// every byte after them.
+    fn axis_point_count(&self, descr: &a2lfile::AxisDescr, source: &AxisSource) -> u32 {
+        match source {
+            AxisSource::AxisPts(name) => self
+                .module()
+                .axis_pts
+                .get(name)
+                .map(|ap| ap.max_axis_points as u32)
+                .unwrap_or(u32::from(descr.max_axis_points)),
+            AxisSource::CurveRef(name) => self
+                .module()
+                .characteristic
+                .get(name)
+                .map(characteristic_declared_points)
+                .unwrap_or(u32::from(descr.max_axis_points)),
+            // A computed axis is exactly as long as its parameters say.
+            AxisSource::Fixed(values) if !values.is_empty() => values.len() as u32,
+            _ => u32::from(descr.max_axis_points),
+        }
+        .max(1)
+    }
+
+    /// Element counts per dimension for a characteristic.
+    fn characteristic_dims(
         &self,
         ch: &Characteristic,
         category: Category,
-    ) -> (AxisSource, Option<ConvInfo>, &'static str) {
-        if category != Category::Curve {
-            return (AxisSource::None, None, "");
+        rl: Option<&RecordLayout>,
+        axes: &[AxisSpec],
+    ) -> Vec<u32> {
+        if category == Category::Scalar || category == Category::Ascii {
+            return vec![characteristic_declared_points(ch)];
         }
-        let Some(descr) = ch.axis_descr.first() else {
-            // A VAL_BLK is 1D but has no axis.
-            return (AxisSource::None, None, "");
-        };
-        let axis_conv = Some(self.conversion_for(&descr.conversion));
-
-        use a2lfile::AxisDescrAttribute as A;
-        let (source, kind) = match descr.attribute {
-            A::StdAxis => (AxisSource::Internal, "STD_AXIS"),
-            // COM_AXIS and RES_AXIS share an AXIS_PTS object…
-            A::ComAxis => (axis_pts_ref(descr), "COM_AXIS"),
-            A::ResAxis => (axis_pts_ref(descr), "RES_AXIS"),
-            // …whereas CURVE_AXIS borrows another curve's values through a
-            // different field entirely.
-            A::CurveAxis => (
-                descr
-                    .curve_axis_ref
-                    .as_ref()
-                    .map(|r| AxisSource::CurveRef(r.curve_axis.clone()))
-                    .unwrap_or(AxisSource::None),
-                "CURVE_AXIS",
-            ),
-            A::FixAxis => (AxisSource::Fixed(fixed_axis_values(descr)), "FIX_AXIS"),
-        };
-        (source, axis_conv, kind)
+        // An axed object is shaped by its axes.
+        if !axes.is_empty() {
+            return axes.iter().map(|a| a.points).collect();
+        }
+        // A VAL_BLK has no axes; MATRIX_DIM is its shape.
+        let dims = matrix_dims(ch);
+        if !dims.is_empty() {
+            return dims;
+        }
+        // Neither: fall back to the single declared count, but never claim
+        // fewer dimensions than the record layout actually stores.
+        let n = rl.map(layout::layout_axis_count).unwrap_or(0).max(1);
+        let mut out = vec![characteristic_declared_points(ch)];
+        out.resize(n, 1);
+        out
     }
 
     /// All object names to list, in A2L declaration order.
@@ -767,37 +914,20 @@ fn classify_characteristic(
     if ch.virtual_characteristic.is_some() {
         return (Category::Virtual, None);
     }
-    // A record layout with Y or higher dimensions is multi-dimensional
-    // regardless of what the characteristic type claims.
-    if let Some(rl) = rl {
-        if layout::is_multi_dimensional(rl) {
-            return (
-                Category::Unsupported,
-                Some("multi-dimensional record layout".to_string()),
-            );
-        }
-    }
+    let multi_dim_layout = rl.map(layout::layout_axis_count).unwrap_or(0) > 1;
     match ch.characteristic_type {
-        CharacteristicType::Value => (Category::Scalar, None),
-        CharacteristicType::Curve => (Category::Curve, None),
-        CharacteristicType::ValBlk => (Category::Curve, None),
-        CharacteristicType::Ascii => (Category::Ascii, None),
-        CharacteristicType::Map => (
-            Category::Unsupported,
-            Some("2D maps are not decoded yet".to_string()),
-        ),
-        CharacteristicType::Cuboid => (
-            Category::Unsupported,
-            Some("3D cuboids are not decoded yet".to_string()),
-        ),
-        CharacteristicType::Cube4 => (
-            Category::Unsupported,
-            Some("4D cubes are not decoded yet".to_string()),
-        ),
-        CharacteristicType::Cube5 => (
-            Category::Unsupported,
-            Some("5D cubes are not decoded yet".to_string()),
-        ),
+        // A VALUE or CURVE whose record layout stores Y or higher is really
+        // multi-dimensional, whatever the type keyword claims.
+        CharacteristicType::Value if !multi_dim_layout => (Category::Scalar, None),
+        CharacteristicType::Ascii if !multi_dim_layout => (Category::Ascii, None),
+        CharacteristicType::Curve | CharacteristicType::ValBlk if !multi_dim_layout => {
+            (Category::Curve, None)
+        }
+        CharacteristicType::Map
+        | CharacteristicType::Cuboid
+        | CharacteristicType::Cube4
+        | CharacteristicType::Cube5 => (Category::Map, None),
+        _ => (Category::Map, None),
     }
 }
 
@@ -816,28 +946,19 @@ fn matrix_dims(ch: &Characteristic) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// How many points the record is sized for.
+/// Total elements a characteristic declares, ignoring how they are shaped.
 ///
-/// MATRIX_DIM is the modern spelling and wins; NUMBER is the deprecated one;
-/// failing both, the axis description's maximum is the allocation.
-fn characteristic_point_count(ch: &Characteristic, category: Category) -> u32 {
-    if category == Category::Scalar {
+/// MATRIX_DIM is the modern spelling and wins — its dimensions multiply, since
+/// taking only the first truncates a 3x4 VAL_BLK to 3 of its 12 elements and
+/// sizes it at a quarter of the bytes it occupies. NUMBER is the deprecated
+/// spelling; failing both, the axis description's maximum is the allocation.
+fn characteristic_declared_points(ch: &Characteristic) -> u32 {
+    if ch.characteristic_type == CharacteristicType::Value {
         return 1;
     }
-    if let Some(md) = &ch.matrix_dim {
-        // MATRIX_DIM may declare several dimensions and the object stores their
-        // product. Taking only the first truncates a 3x4 VAL_BLK to 3 of its 12
-        // elements, and sizes it at a quarter of the bytes it really occupies.
-        let dims: Vec<u32> = md
-            .dim_list
-            .iter()
-            .copied()
-            .filter(|d| *d > 0)
-            .map(u32::from)
-            .collect();
-        if !dims.is_empty() {
-            return dims.iter().product();
-        }
+    let dims = matrix_dims(ch);
+    if !dims.is_empty() {
+        return dims.iter().product();
     }
     if let Some(n) = &ch.number {
         if n.number > 0 {
@@ -869,7 +990,7 @@ mod tests {
     }
 
     /// A bare plan carrying only the fields the index mapping consults.
-    fn plan_for(dims: &[u32], column_dir: bool, reversed: bool) -> ObjectPlan {
+    fn plan_for(dims: &[u32], column_dir: bool, reversed: &[bool]) -> ObjectPlan {
         ObjectPlan {
             name: "T".into(),
             description: String::new(),
@@ -881,14 +1002,12 @@ mod tests {
                 ..Default::default()
             },
             conv: ConvInfo::identity("CM"),
-            axis_conv: None,
-            axis: AxisSource::None,
-            axis_kind: "",
+            axes: Vec::new(),
             bit_mask: 0,
             virtual_formula: None,
             virtual_inputs: Vec::new(),
-            display_reversed: reversed,
-            matrix_dims: dims.to_vec(),
+            dims: dims.to_vec(),
+            dims_reversed: reversed.to_vec(),
             endian: Endian::Little,
             lower_limit: 0.0,
             upper_limit: 0.0,
@@ -904,7 +1023,7 @@ mod tests {
 
     #[test]
     fn row_dir_stores_in_presentation_order() {
-        let plan = plan_for(&[3, 4], false, false);
+        let plan = plan_for(&[3, 4], false, &[false, false]);
         assert_eq!(slots(&plan, 12), (0..12).collect::<Vec<_>>());
     }
 
@@ -912,7 +1031,7 @@ mod tests {
     /// first dimension fastest, storage walks the last.
     #[test]
     fn column_dir_maps_row_major_onto_column_major() {
-        let plan = plan_for(&[3, 4], true, false);
+        let plan = plan_for(&[3, 4], true, &[false, false]);
         assert_eq!(
             slots(&plan, 12),
             vec![0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]
@@ -922,13 +1041,32 @@ mod tests {
     /// Whatever the shape, the mapping must be a permutation — every element
     /// reachable exactly once, or reading loses data and writing doubles up.
     #[test]
-    fn column_dir_mapping_is_a_permutation() {
-        for dims in [vec![3, 4], vec![4, 3], vec![2, 3, 4], vec![5, 1, 2]] {
+    fn the_mapping_is_always_a_permutation() {
+        let shapes = [
+            vec![3, 4],
+            vec![4, 3],
+            vec![2, 3, 4],
+            vec![5, 1, 2],
+            vec![2, 3, 4, 5],
+        ];
+        for dims in shapes {
             let count: u32 = dims.iter().product();
-            let plan = plan_for(&dims, true, false);
-            let mut seen = slots(&plan, count);
-            seen.sort_unstable();
-            assert_eq!(seen, (0..count).collect::<Vec<_>>(), "dims {dims:?}");
+            for column_dir in [false, true] {
+                // Every combination of per-axis reversal, so a map with a
+                // decreasing Y is covered as well as one with neither.
+                for mask in 0..(1u32 << dims.len()) {
+                    let rev: Vec<bool> =
+                        (0..dims.len()).map(|d| mask >> d & 1 == 1).collect();
+                    let plan = plan_for(&dims, column_dir, &rev);
+                    let mut seen = slots(&plan, count);
+                    seen.sort_unstable();
+                    assert_eq!(
+                        seen,
+                        (0..count).collect::<Vec<_>>(),
+                        "dims {dims:?} column_dir {column_dir} reversed {rev:?}"
+                    );
+                }
+            }
         }
     }
 
@@ -936,14 +1074,40 @@ mod tests {
     /// stored in the order it is read, whatever the record layout declares.
     #[test]
     fn column_dir_is_identity_for_one_dimension() {
-        assert_eq!(slots(&plan_for(&[6], true, false), 6), (0..6).collect::<Vec<_>>());
-        assert_eq!(slots(&plan_for(&[], true, false), 6), (0..6).collect::<Vec<_>>());
+        assert_eq!(
+            slots(&plan_for(&[6], true, &[false]), 6),
+            (0..6).collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn index_decr_reverses() {
-        let plan = plan_for(&[], false, true);
+    fn index_decr_reverses_a_curve() {
+        let plan = plan_for(&[4], false, &[true]);
         assert_eq!(slots(&plan, 4), vec![3, 2, 1, 0]);
+    }
+
+    /// An INDEX_DECR axis on a map reverses along *its own* dimension. The
+    /// whole-array reversal that is correct in one dimension would here also
+    /// flip X, mispairing every value with the wrong breakpoint.
+    #[test]
+    fn index_decr_on_y_reverses_only_y() {
+        // 3 wide, 4 tall, Y stored highest-first.
+        let plan = plan_for(&[3, 4], false, &[false, true]);
+        // Presentation row 0 must read storage row 3, left to right.
+        assert_eq!(slots(&plan, 12), vec![9, 10, 11, 6, 7, 8, 3, 4, 5, 0, 1, 2]);
+
+        // And with X reversed instead, each row is mirrored in place.
+        let plan = plan_for(&[3, 4], false, &[true, false]);
+        assert_eq!(slots(&plan, 12), vec![2, 1, 0, 5, 4, 3, 8, 7, 6, 11, 10, 9]);
+    }
+
+    /// A field the declared shape does not account for — a rescale axis, or a
+    /// MATRIX_DIM at odds with the record layout — is treated as a flat run
+    /// rather than indexed through a shape that does not fit it.
+    #[test]
+    fn a_mismatched_extent_falls_back_to_a_flat_run() {
+        let plan = plan_for(&[3, 4], true, &[false, false]);
+        assert_eq!(slots(&plan, 5), (0..5).collect::<Vec<_>>());
     }
 }
 
