@@ -425,8 +425,10 @@ pub fn export(db: &A2lDatabase, src: &dyn ByteSource) -> Vec<CdfxInstance> {
                     category: category.into(),
                     values,
                     // Only a genuinely multi-dimensional object needs its shape
-                    // spelled out; a flat list is unambiguous without it.
-                    array_size: if detail.dims.len() > 1 {
+                    // spelled out; a flat list is unambiguous without it, and
+                    // a MATRIX_DIM that pads itself out to three dimensions
+                    // describes a flat list however it is written.
+                    array_size: if decode::is_grid(&detail.dims) {
                         detail.dims.clone()
                     } else {
                         Vec::new()

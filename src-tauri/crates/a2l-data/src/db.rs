@@ -937,17 +937,29 @@ fn classify_characteristic(
 
 /// The declared MATRIX_DIM, zero and absent dimensions dropped.
 fn matrix_dims(ch: &Characteristic) -> Vec<u32> {
-    ch.matrix_dim
-        .as_ref()
-        .map(|md| {
-            md.dim_list
-                .iter()
-                .copied()
-                .filter(|d| *d > 0)
-                .map(u32::from)
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(md) = ch.matrix_dim.as_ref() else {
+        return Vec::new();
+    };
+    let mut dims: Vec<u32> = md
+        .dim_list
+        .iter()
+        .copied()
+        .filter(|d| *d > 0)
+        .map(u32::from)
+        .collect();
+
+    // ASAP2 up to 1.6 required all three dimensions to be written, so a plain
+    // array of eight is spelled `MATRIX_DIM 8 1 1`. Those trailing ones are
+    // padding rather than shape and would otherwise be presented as a 8 x 1 x 1
+    // grid. Dropping them cannot move any element: a trailing dimension of
+    // extent one has a subscript that is always zero.
+    //
+    // Only *trailing* ones go. An interior one is load-bearing — COLUMN_DIR
+    // swaps the first two dimensions, so `3 1 4` and `3 4` store differently.
+    while dims.len() > 1 && dims.last() == Some(&1) {
+        dims.pop();
+    }
+    dims
 }
 
 /// Total elements a characteristic declares, ignoring how they are shaped.
@@ -1023,6 +1035,36 @@ mod tests {
 
     fn slots(plan: &ObjectPlan, count: u32) -> Vec<u32> {
         (0..count).map(|i| plan.storage_slot(i, count)).collect()
+    }
+
+    fn dims_of(list: &[u16]) -> Vec<u32> {
+        let mut ch = a2lfile::Characteristic::new(
+            "C".into(),
+            String::new(),
+            CharacteristicType::ValBlk,
+            0,
+            "RL".into(),
+            0.0,
+            "CM".into(),
+            0.0,
+            0.0,
+        );
+        let mut md = a2lfile::MatrixDim::new();
+        md.dim_list = list.to_vec();
+        ch.matrix_dim = Some(md);
+        matrix_dims(&ch)
+    }
+
+    /// Trailing ones are the ASAP2 <= 1.6 padding and carry no shape; an
+    /// interior one does, because COLUMN_DIR swaps the first two dimensions.
+    #[test]
+    fn matrix_dim_drops_only_trailing_ones() {
+        assert_eq!(dims_of(&[8, 1, 1]), vec![8]);
+        assert_eq!(dims_of(&[3, 4, 1]), vec![3, 4]);
+        assert_eq!(dims_of(&[1, 8, 1]), vec![1, 8]);
+        assert_eq!(dims_of(&[3, 1, 4]), vec![3, 1, 4]);
+        assert_eq!(dims_of(&[1, 1, 1]), vec![1]);
+        assert_eq!(dims_of(&[3, 4]), vec![3, 4]);
     }
 
     #[test]

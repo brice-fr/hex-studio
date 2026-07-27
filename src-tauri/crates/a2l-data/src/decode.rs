@@ -634,11 +634,20 @@ fn gather<T: Clone>(stored: Vec<T>, plan: &ObjectPlan, dims: &[u32]) -> Vec<T> {
         .collect()
 }
 
-/// How a multi-dimensional object is labelled: `4 × 5` rather than a bare
-/// element count, since the shape is the interesting part and "20" alone says
-/// nothing about how those twenty are arranged.
+/// Whether a declared shape describes a real grid rather than a flat run that
+/// merely spells out its unused dimensions.
+pub(crate) fn is_grid(dims: &[u32]) -> bool {
+    dims.iter().filter(|d| **d > 1).count() > 1
+}
+
+/// How an object's extent is labelled: `4 × 5` for a real grid, a point count
+/// for anything that is a flat run however it was declared.
+///
+/// A shape is only worth spelling out when two or more dimensions actually
+/// extend. `MATRIX_DIM 1 8 1` describes eight values in a column, not a
+/// 1 × 8 × 1 volume, and reading it as one tells the user nothing they want.
 fn shape_label(dims: &[u32], n: u32) -> String {
-    if dims.len() > 1 {
+    if is_grid(dims) {
         dims.iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()
@@ -854,6 +863,18 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shape_is_only_spelled_out_when_it_is_really_a_grid() {
+        assert_eq!(shape_label(&[4, 5], 20), "4 × 5");
+        assert_eq!(shape_label(&[2, 3, 4], 24), "2 × 3 × 4");
+        // ASAP2 <= 1.6 pads a plain array out to three dimensions; a column
+        // orientation puts the extent second. Neither is a grid.
+        assert_eq!(shape_label(&[8, 1, 1], 8), "8 pts");
+        assert_eq!(shape_label(&[1, 8, 1], 8), "8 pts");
+        assert_eq!(shape_label(&[8], 8), "8 pts");
+        assert_eq!(shape_label(&[1, 1, 1], 1), "1 pts");
+    }
 
     #[test]
     fn reads_unsigned_little_endian() {
