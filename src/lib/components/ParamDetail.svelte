@@ -192,6 +192,91 @@
     }
   }
 
+  // ── Curve plot ────────────────────────────────────────────────────────────
+  /** Measured so the plot can be laid out in real pixels; stretching a fixed
+   *  viewBox to fit would turn the point dots into ellipses. */
+  let plotW = $state(0);
+  const PLOT_H = 92;
+  const PAD = { t: 10, r: 8, b: 10, l: 8 };
+
+  /** Which point the pointer is over, or null. */
+  let hoverPoint = $state(/** @type {number|null} */ (null));
+
+  /**
+   * The value a cell would take right now, preferring an in-progress edit.
+   *
+   * Reading the draft rather than the committed value is what makes the plot
+   * follow the keystrokes: the backend only hears about the change on commit,
+   * which would otherwise leave the curve a step behind what the user typed.
+   */
+  function liveValue(target, i, fallback) {
+    if (editingCell === `${target}:${i}`) {
+      const t = cellDraft.trim();
+      const v = Number(t);
+      if (t !== '' && !Number.isNaN(v)) return v;
+    }
+    return fallback;
+  }
+
+  /**
+   * Screen geometry for the plot, or null when there is nothing to draw.
+   *
+   * X is the axis breakpoint where the object has one and the point index
+   * otherwise, so a value block still plots as the series it is.
+   */
+  const plot = $derived.by(() => {
+    if (!points.length || plotW <= 0) return null;
+
+    const data = points
+      .map((p, i) => ({
+        i,
+        x: p.axis ? liveValue('axis', i, p.axis.phys) : i,
+        y: p.value ? liveValue('value', i, p.value.phys) : null,
+      }))
+      .filter((p) => p.y !== null && Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (data.length < 2) return null;
+
+    const xs = data.map((p) => p.x);
+    const ys = data.map((p) => p.y);
+    const xLo = Math.min(...xs), xHi = Math.max(...xs);
+    const yLo = Math.min(...ys), yHi = Math.max(...ys);
+
+    const w = Math.max(1, plotW - PAD.l - PAD.r);
+    const h = PLOT_H - PAD.t - PAD.b;
+    // A constant series has no span to divide by; centre it instead of
+    // collapsing every point onto the top edge.
+    const sx = (v) => (xHi === xLo ? PAD.l + w / 2 : PAD.l + ((v - xLo) / (xHi - xLo)) * w);
+    const sy = (v) => (yHi === yLo ? PAD.t + h / 2 : PAD.t + h - ((v - yLo) / (yHi - yLo)) * h);
+
+    const screen = data.map((p) => ({ ...p, cx: sx(p.x), cy: sy(p.y) }));
+    return {
+      screen,
+      line: screen.map((p) => `${p.cx.toFixed(1)},${p.cy.toFixed(1)}`).join(' '),
+      zero: yLo < 0 && yHi > 0 ? sy(0) : null,
+      xLo, xHi, yLo, yHi,
+    };
+  });
+
+  /** Compact number for the plot caption, honouring the decimals override. */
+  function fmtNum(v) {
+    if (!Number.isFinite(v)) return '—';
+    if (decimals !== null) return v.toFixed(decimals);
+    return Number.isInteger(v) ? String(v) : String(Number(v.toFixed(4)));
+  }
+
+  /** Nearest plotted point to a pointer position, for hover and click. */
+  function nearestPoint(e) {
+    if (!plot) return null;
+    const box = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - box.left;
+    let best = null, bestD = Infinity;
+    for (const p of plot.screen) {
+      const d = Math.abs(p.cx - x);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
   /**
    * Pair axis breakpoints with function values for the curve table.
    *
@@ -424,6 +509,67 @@
             </span>
           {/if}
         </div>
+        <!-- Shape of the curve at a glance. Follows the draft while a cell is
+             being typed into, so an edit is visible before it is committed. -->
+        <div class="plot-wrap" bind:clientWidth={plotW}>
+          {#if plot}
+            <!-- The plot is a second view of the table below, not a second way
+                 in: hovering only reads out a point, and clicking is a shortcut
+                 to the same cell editor the table exposes to the keyboard. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <svg
+              class="plot"
+              width={plotW}
+              height={PLOT_H}
+              role="img"
+              aria-label="Plot of {row.name}"
+              onpointermove={(e) => (hoverPoint = nearestPoint(e)?.i ?? null)}
+              onpointerleave={() => (hoverPoint = null)}
+              onclick={(e) => {
+                const p = nearestPoint(e);
+                if (p && detail?.values_editable) beginCell('value', p.i, points[p.i].value.phys);
+              }}
+            >
+              {#if plot.zero !== null}
+                <line class="zero" x1={PAD.l} y1={plot.zero} x2={plotW - PAD.r} y2={plot.zero} />
+              {/if}
+              <polyline class="line" points={plot.line} />
+              {#each plot.screen as p}
+                <circle
+                  class="dot"
+                  class:on={hoverPoint === p.i}
+                  class:editing={editingCell === `value:${p.i}` || editingCell === `axis:${p.i}`}
+                  cx={p.cx}
+                  cy={p.cy}
+                  r={hoverPoint === p.i ? 3.5 : 2}
+                />
+              {/each}
+              {#if hoverPoint !== null}
+                {@const h = plot.screen.find((p) => p.i === hoverPoint)}
+                {#if h}
+                  <line class="cursor" x1={h.cx} y1={PAD.t} x2={h.cx} y2={PLOT_H - PAD.b} />
+                {/if}
+              {/if}
+            </svg>
+            <div class="plot-cap">
+              {#if hoverPoint !== null}
+                {@const h = plot.screen.find((p) => p.i === hoverPoint)}
+                {#if h}
+                  <span class="cap-i">#{h.i}</span>
+                  <span>{fmtNum(h.x)}</span>
+                  <span class="cap-arrow">→</span>
+                  <span class="cap-y">{fmtNum(h.y)}</span>
+                {/if}
+              {:else}
+                <span>{fmtNum(plot.xLo)} … {fmtNum(plot.xHi)}</span>
+                <span class="cap-arrow">→</span>
+                <span class="cap-y">{fmtNum(plot.yLo)} … {fmtNum(plot.yHi)}</span>
+              {/if}
+            </div>
+          {/if}
+        </div>
+
         <div class="points-wrap">
           <table class="points">
             <thead>
@@ -770,6 +916,64 @@
     padding: 0 2px;
     line-height: 1.45;
   }
+
+  .plot-wrap {
+    margin: 4px 0 2px;
+  }
+
+  .plot {
+    display: block;
+    background: var(--c-bg);
+    border: 1px solid var(--c-border2);
+    border-radius: 5px;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .plot .line {
+    fill: none;
+    stroke: var(--c-accent);
+    stroke-width: 1.5;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+
+  .plot .dot {
+    fill: var(--c-accent);
+    stroke: var(--c-bg);
+    stroke-width: 1;
+  }
+
+  .plot .dot.on      { fill: var(--c-accent-h, var(--c-accent)); }
+  .plot .dot.editing { fill: var(--c-diff-changed); }
+
+  /* A zero crossing is worth seeing; a full grid would be noise at this size. */
+  .plot .zero {
+    stroke: var(--c-border2);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+  }
+
+  .plot .cursor {
+    stroke: var(--c-border2);
+    stroke-width: 1;
+  }
+
+  .plot-cap {
+    display: flex;
+    gap: 5px;
+    align-items: baseline;
+    font-size: 10px;
+    font-family: 'Cascadia Code', 'SF Mono', monospace;
+    color: var(--c-muted);
+    padding: 3px 2px 0;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .cap-i     { color: var(--c-dim); }
+  .cap-arrow { color: var(--c-dim); }
+  .cap-y     { color: var(--c-text2); }
 
   .points-wrap { overflow-x: auto; }
 
