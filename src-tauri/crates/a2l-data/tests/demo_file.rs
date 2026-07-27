@@ -1472,3 +1472,61 @@ fn the_table_summarises_curves_by_span_and_maps_by_shape() {
         assert!(row.unit.is_empty(), "{name}: a shape takes no unit");
     }
 }
+
+/// Breakpoints are writable only when the bytes holding them are in the image.
+///
+/// A FIX_AXIS is computed from FIX_AXIS_PAR / _DIST / _LIST in the A2L and
+/// occupies no image bytes at all, so it can never be edited — there is
+/// nothing to write. A shared axis does live in the image, but in its own
+/// AXIS_PTS object, so it is edited there rather than through every curve that
+/// happens to reference it.
+#[test]
+fn only_axes_stored_in_the_image_are_editable() {
+    let Some((db, img)) = open_demo() else { return };
+    use a2l_data::encode::{encode_point, PointTarget};
+
+    // (object, axis kind, may be edited here)
+    let cases: [(&str, &str, bool); 6] = [
+        ("ASAM.C.CURVE.STD_AXIS", "STD_AXIS", true),
+        ("ASAM.C.CURVE.FIX_AXIS.PAR", "FIX_AXIS", false),
+        ("ASAM.C.CURVE.FIX_AXIS.PAR_DIST", "FIX_AXIS", false),
+        ("ASAM.C.CURVE.FIX_AXIS.PAR_LIST", "FIX_AXIS", false),
+        ("ASAM.C.CURVE.COM_AXIS", "COM_AXIS", false),
+        ("ASAM.C.CURVE.CURVE_AXIS", "CURVE_AXIS", false),
+    ];
+
+    for (name, kind, editable) in cases {
+        let detail = decode::detail_for(&db, &img, name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(detail.axis_kind, kind, "{name}");
+        assert_eq!(detail.axis_editable, editable, "{name} axis_editable");
+        assert_eq!(detail.axes[0].editable, editable, "{name} axes[0].editable");
+
+        // The backend must refuse too: a UI that offered the edit anyway, or a
+        // CDFX naming these points, must not get a write through the side door.
+        let attempt = encode_point(&db, &img, name, PointTarget::AXIS, 0, 1.0);
+        assert_eq!(attempt.is_ok(), editable, "{name}: encode_point disagrees");
+        if !editable {
+            let why = attempt.unwrap_err();
+            assert!(
+                why.contains("computed") || why.contains("belongs to"),
+                "{name}: unhelpful refusal {why:?}"
+            );
+        }
+    }
+
+    // A map's computed second axis is refused the same way.
+    let fixed = encode_point(
+        &db, &img, "ASAM.C.MAP.COM_AXIS.FIX_AXIS", PointTarget::Axis(1), 0, 1.0,
+    );
+    assert!(fixed.unwrap_err().contains("computed"));
+
+    // The other half of the rule: a shared axis is in the image, so it is
+    // editable — on the object that owns it, where its points are the values.
+    let owner = "ASAM.C.AXIS_PTS.UBYTE_8";
+    let detail = decode::detail_for(&db, &img, owner).expect("axis object");
+    assert!(detail.values_editable, "{owner} holds real bytes and must be writable");
+    assert!(
+        encode_point(&db, &img, owner, PointTarget::Value, 0, 3.0).is_ok(),
+        "{owner} points must be writable through the object that stores them"
+    );
+}
