@@ -458,8 +458,10 @@
       {#each [
         { id: 'all',         label: 'All',         n: counts.all },
         { id: 'scalar',      label: 'Scalars',     n: counts.scalar },
-        { id: 'curve',       label: '1D curves',   n: counts.curve },
+        // Ordered by dimension: a scalar, then the breakpoints a curve is
+        // indexed by, then the curves themselves, then the grids.
         { id: 'axis',        label: 'Axes',        n: counts.axis },
+        { id: 'curve',       label: '1D curves',   n: counts.curve },
         { id: 'map',         label: 'Maps & cubes', n: counts.map },
         { id: 'ascii',       label: 'Strings',     n: counts.ascii },
         { id: 'virtual',     label: 'Virtual',     n: counts.virtual },
