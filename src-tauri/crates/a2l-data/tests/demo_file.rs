@@ -1530,3 +1530,38 @@ fn only_axes_stored_in_the_image_are_editable() {
         "{owner} points must be writable through the object that stores them"
     );
 }
+
+/// `point_count` is the frontend's test for "does this object have an array
+/// worth fetching", so which rows carry one is a contract, not an incidental.
+///
+/// It replaced a list of category names that had quietly gone stale: maps
+/// stopped being `curve` when they became their own category, and the detail
+/// fetch went on checking for `curve` alone, so no map ever loaded its points.
+#[test]
+fn point_count_marks_exactly_the_objects_with_an_array() {
+    let Some((db, img)) = open_demo() else { return };
+
+    for row in decode::list_rows(&db, &img, false) {
+        let expected = matches!(row.category, Category::Curve | Category::Map);
+        assert_eq!(
+            row.point_count.is_some(),
+            expected,
+            "{} ({:?}) disagrees about having points",
+            row.name,
+            row.category
+        );
+
+        // And the promise has to hold: a row claiming points must resolve to a
+        // detail the pane can render.
+        if expected {
+            let detail = decode::detail_for(&db, &img, &row.name)
+                .unwrap_or_else(|| panic!("{} claims points but has no detail", row.name));
+            assert!(
+                !detail.values.is_empty() || row.presence != Presence::Full,
+                "{} claims {:?} points but decoded none",
+                row.name,
+                row.point_count
+            );
+        }
+    }
+}

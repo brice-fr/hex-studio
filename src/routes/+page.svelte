@@ -402,8 +402,15 @@
 
   async function loadA2lDetail(name) {
     const row = a2lRows.find((r) => r.name === name);
-    // Only 1D objects have point arrays worth fetching.
-    if (!row || row.category !== 'curve') { a2lDetailData = null; return; }
+    // Fetch for anything holding an array of points. The backend already
+    // answers that question — it sets point_count only for the shapes that
+    // have one — so asking it beats keeping a list of category names in step,
+    // which is exactly how maps went a whole milestone without ever being
+    // fetched: they had stopped being 'curve' and nothing here noticed.
+    if (!row || row.point_count === null || row.point_count === undefined) {
+      a2lDetailData = null;
+      return;
+    }
     try {
       a2lDetailData = await a2lDetail(name, records);
     } catch {
