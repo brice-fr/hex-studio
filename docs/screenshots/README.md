@@ -36,7 +36,7 @@ numbers in them come from `ASAP2_Demo_V171.hex` read through
 
 | File | Shows |
 |------|-------|
-| `hex.png` | The hex view at the calibration block — the rest of the image is `FF` padding and says nothing |
+| `hex.png` | The hex view at the calibration block, with both side panes open — the rest of the image is `FF` padding and says nothing |
 | `data.png` | The data view: coverage banner, categories, parameter table, and a curve with its plot |
 | `map.png` | The map editor: shaded grid, verbal row labels, and the family-of-curves plot |
 
