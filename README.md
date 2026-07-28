@@ -86,6 +86,9 @@ Every edit is encoded in Rust and applied through the same write path as a hex e
 - **Edit values…** opens a full-size grid: X breakpoints across the top, Y down the side, cells editable in place, shading on a value ramp
 - Anything beyond two dimensions gets a **slice selector** per extra dimension, reducing a cuboid or cube to a plane
 - A **family-of-curves plot** draws each row of the visible slice; hovering a row in the grid traces its curve and the reverse. Every curve shares one vertical scale, pinned to the whole object, so slices stay comparable as you step through them
+- A **3D surface** view of the same slice, in place of the curves. Drag to orbit, arrow keys to rotate, Home to reset; cells use the grid's own shading, so the two views agree about where the highs are
+  - Axes are placed at their **true breakpoints** wherever those are numeric, so an axis running 0…5 then 13, 15 shows as bunched columns and a wide gap rather than an even mesh that hides it. A verbal axis has no coordinate to place, so it falls back to even spacing and the caption says so
+  - Drawn as plain SVG: a map is a height field, so cells cannot intersect and painting them back to front by their footprint is exact — no depth buffer and no WebGL
 
 **Which breakpoints can be edited** depends on where the bytes are:
 
@@ -308,6 +311,7 @@ hex-studio/
 │   │   ├── editOps.js            # Record-level edit primitives + checksums
 │   │   ├── mapGrid.js            # Grid index arithmetic, slicing, shading
 │   │   ├── plot.js               # Screen geometry for the parameter plots
+│   │   ├── surface.js            # 3D projection and depth ordering for maps
 │   │   ├── hexHtmlExport.js      # Hex viewer HTML report generator
 │   │   └── components/
 │   │       ├── HexViewer.svelte        # Virtual-scrolling hex display + copy menu
@@ -333,6 +337,7 @@ hex-studio/
 │   │       ├── MapGrid.svelte          # One 2D slice, preview or editable
 │   │       ├── MapEditor.svelte        # Full-size map grid overlay
 │   │       ├── MapPlot.svelte          # A map as a family of curves
+│   │       ├── MapSurface.svelte       # A map as an orbitable 3D surface
 │   │       └── CdfxImportDialog.svelte # CDFX import preview and statistics
 │   └── routes/
 │       ├── +page.svelte          # App shell and native menu

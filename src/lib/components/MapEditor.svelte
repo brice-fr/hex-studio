@@ -22,6 +22,7 @@
    */
   import MapGrid from './MapGrid.svelte';
   import MapPlot from './MapPlot.svelte';
+  import MapSurface from './MapSurface.svelte';
 
   let {
     open        = false,
@@ -34,7 +35,10 @@
   } = $props();
 
   let shaded = $state(true);
-  let plotted = $state(true);
+  /** Which view sits under the grid: `curves`, `surface`, or neither. The two
+   *  answer the same question differently, and the card is tall enough as it
+   *  is, so they take turns rather than stacking. */
+  let below = $state(/** @type {'curves'|'surface'|'none'} */ ('curves'));
 
   /** The row traced in the plot and marked in the grid. One piece of state
    *  drives both, so they can never disagree about which row that is. */
@@ -91,10 +95,20 @@
             <input type="checkbox" bind:checked={shaded}>
             Shade
           </label>
-          <label class="toggle" title="Plot each row as a curve">
-            <input type="checkbox" bind:checked={plotted}>
-            Curves
-          </label>
+          <div class="seg" role="group" aria-label="Plot below the grid">
+            {#each [
+              { id: 'curves',  label: 'Curves',  hint: 'Plot each row as a curve' },
+              { id: 'surface', label: '3D',      hint: 'Draw the slice as a surface' },
+              { id: 'none',    label: 'None',    hint: 'Grid only' },
+            ] as opt}
+              <button
+                class="seg-btn"
+                class:on={below === opt.id}
+                title={opt.hint}
+                onclick={() => (below = opt.id)}
+              >{opt.label}</button>
+            {/each}
+          </div>
           <button class="btn-close" onclick={onClose} aria-label="Close">×</button>
         </div>
       </div>
@@ -144,8 +158,10 @@
         />
       </div>
 
-      {#if plotted}
+      {#if below === 'curves'}
         <MapPlot {detail} {slice} {decimals} highlight={traced} onHover={(y) => (traced = y)} />
+      {:else if below === 'surface'}
+        <MapSurface {detail} {slice} {decimals} highlight={traced} onHover={(y) => (traced = y)} />
       {/if}
     </div>
   </div>
@@ -226,6 +242,28 @@
     color: var(--c-muted);
     cursor: pointer;
   }
+
+  /* Matches the hex/data switch in the toolbar, so a three-way choice looks
+     like the one the app already has. */
+  .seg {
+    display: flex;
+    border: 1px solid var(--c-border2);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .seg-btn {
+    background: none;
+    border: none;
+    color: var(--c-muted);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+
+  .seg-btn:hover:not(.on) { background: var(--c-hover); color: var(--c-text); }
+  .seg-btn.on { background: var(--c-accent); color: #fff; }
 
   .btn-close {
     background: none;
