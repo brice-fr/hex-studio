@@ -345,6 +345,35 @@
     absent:      (r) => isMissing(r),
   };
 
+  /**
+   * The categories worth offering, in order of dimension: a scalar, then the
+   * breakpoints a curve is indexed by, then the curves, then the grids.
+   *
+   * Unsupported is hidden when empty. Nearly every shape decodes now, so for
+   * most descriptions it is a permanently-zero button that only invites a
+   * click leading nowhere; when a file does contain one it is worth finding,
+   * which is exactly when it appears.
+   */
+  const visibleCategories = $derived(
+    [
+      { id: 'all',         label: 'All',          n: counts.all },
+      { id: 'scalar',      label: 'Scalars',      n: counts.scalar },
+      { id: 'axis',        label: 'Axes',         n: counts.axis },
+      { id: 'curve',       label: '1D curves',    n: counts.curve },
+      { id: 'map',         label: 'Maps & cubes', n: counts.map },
+      { id: 'ascii',       label: 'Strings',      n: counts.ascii },
+      { id: 'virtual',     label: 'Virtual',      n: counts.virtual },
+      { id: 'unsupported', label: 'Unsupported',  n: counts.unsupported, whenAny: true },
+      { id: 'absent',      label: 'Not in image', n: counts.absent },
+    ].filter((c) => !c.whenAny || c.n > 0),
+  );
+
+  // A filter that has just disappeared would otherwise leave the table empty
+  // with nothing on screen explaining why.
+  $effect(() => {
+    if (!visibleCategories.some((c) => c.id === category)) category = 'all';
+  });
+
   const counts = $derived.by(() => {
     const c = Object.fromEntries(Object.keys(CATEGORY_MATCH).map((k) => [k, 0]));
     for (const r of rows) {
@@ -455,19 +484,7 @@
     <!-- ── Category sidebar ── -->
     <aside class="dv-side">
       <div class="side-title">Categories</div>
-      {#each [
-        { id: 'all',         label: 'All',         n: counts.all },
-        { id: 'scalar',      label: 'Scalars',     n: counts.scalar },
-        // Ordered by dimension: a scalar, then the breakpoints a curve is
-        // indexed by, then the curves themselves, then the grids.
-        { id: 'axis',        label: 'Axes',        n: counts.axis },
-        { id: 'curve',       label: '1D curves',   n: counts.curve },
-        { id: 'map',         label: 'Maps & cubes', n: counts.map },
-        { id: 'ascii',       label: 'Strings',     n: counts.ascii },
-        { id: 'virtual',     label: 'Virtual',     n: counts.virtual },
-        { id: 'unsupported', label: 'Unsupported', n: counts.unsupported },
-        { id: 'absent',      label: 'Not in image', n: counts.absent },
-      ] as cat}
+      {#each visibleCategories as cat}
         <button
           class="cat"
           class:active={category === cat.id}
