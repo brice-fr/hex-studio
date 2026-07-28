@@ -2,6 +2,8 @@
 
 A fast, cross-platform hex editor for **Intel HEX**, **Motorola S-record**, and **raw binary** files, built with Tauri 2, SvelteKit, and Rust.
 
+Load an **ASAM MCD-2 MC (A2L)** description alongside the image and it also becomes a calibration editor: named parameters with their physical values, curves and maps you can edit in place, and **ASAM CDF 2.1 (CDFX)** import and export.
+
 ---
 
 ## Features
@@ -35,6 +37,67 @@ A fast, cross-platform hex editor for **Intel HEX**, **Motorola S-record**, and 
 - **Insert Checksum…** — compute **XOR**, **sum-8**, **CRC-16** or **CRC-32** over a range and write the result back into the image at a chosen address, with selectable width (1/2/4 bytes) and byte order (LE/BE). Start, end and target addresses are pre-filled from the file's own layout
 
 Fill, Move, Paste and Import each offer two write modes: **overwrite existing**, or **fill empty only** — the latter writes solely into address gaps, leaving existing data untouched.
+
+### Physical Data View (A2L)
+
+Load an ASAM MCD-2 MC description (`.a2l`) and the image stops being bytes and becomes named, converted parameters.
+
+- **Load** via *File > Load associated A2L…* (⌘⇧D), the toolbar's drop target, or by dropping an `.a2l` file on the window
+- The A2L last used with a given hex file is **remembered and pre-filled**, but never auto-loaded — the association is a hint, and silently decoding against the wrong description is worse than asking
+- **hex / data** toggle in the toolbar switches between the byte view and the parameter view; the segment list and data inspector belong to the hex view and are hidden (not forgotten) in the data view
+- **Coverage banner**: objects in the image, partial, absent, virtual, described and undescribed bytes, and the percentage of the image the description accounts for
+- **Categories** sidebar filters by shape — Scalars, Axes, 1D curves, Maps & cubes, Strings, Virtual, Not in image — each with a live count. *Unsupported* appears only when a file actually contains one
+- **Columns**: Name, Address, Type, Raw and Physical, individually resizable; Address, Type and Raw are toggleable in Preferences (only Type is on by default)
+- **Decimals stepper** overrides the A2L `FORMAT` for every fractional value at once
+- **MEASUREMENT objects** can be shown alongside characteristics (Preferences) — useful when reading a RAM dump rather than a calibration image
+
+### Editing Physical Values
+
+Every edit is encoded in Rust and applied through the same write path as a hex edit, so it joins the same undo history and modified flag.
+
+- **Scalars** — typed directly, with a **slider** spanning the declared limits and stepping by one raw LSB, so it can only land on values the field can actually store
+- **Enumerations** — chosen from the labels the `COMPU_METHOD` defines, for scalars, curve points and map breakpoints alike. A verbal value is written by name, since such a conversion has no numeric inverse
+- **ASCII strings** — edited as text, limited to what the array holds including its terminator
+- **1D curves and axes** — an axis→value point table, with a **plot** above it that follows the draft as you type rather than waiting for the commit
+- **Jump to bytes** — any parameter's address opens the hex view at that offset, and a curve referencing a shared axis links to the object that owns it
+
+### Maps, Cuboids and Cubes
+
+`MAP`, `CUBOID`, `CUBE_4` and `CUBE_5` decode and encode in full.
+
+- The detail pane shows a **shaded grid preview**, elided to fit, with the object's shape (`4 × 5`) and one row per axis
+- **Edit values…** opens a full-size grid: X breakpoints across the top, Y down the side, cells editable in place, shading on a value ramp
+- Anything beyond two dimensions gets a **slice selector** per extra dimension, reducing a cuboid or cube to a plane
+- A **family-of-curves plot** draws each row of the visible slice; hovering a row in the grid traces its curve and the reverse. Every curve shares one vertical scale, pinned to the whole object, so slices stay comparable as you step through them
+
+**Which breakpoints can be edited** depends on where the bytes are:
+
+| Axis | Data lives in | Editable |
+|------|---------------|----------|
+| `STD_AXIS` | this object's own record | yes |
+| `COM_AXIS`, `RES_AXIS` | a shared `AXIS_PTS` object | on that object — linked from the grid |
+| `CURVE_AXIS` | another characteristic's values | on that object |
+| `FIX_AXIS` | the A2L itself (`FIX_AXIS_PAR` / `_DIST` / `_LIST`) | no — it occupies no image bytes |
+
+### Calibration Data Exchange (CDFX)
+
+Import and export ASAM CDF 2.1 files. Both entries stay disabled until an A2L **and** a hex file are loaded, since neither half means anything alone.
+
+- **Import** shows what would change before anything is written: how many parameters would change, already match, were skipped and why, and which names the A2L does not define — then applies the whole set as **one undo entry**
+- Differences are compared as **stored bytes** rather than physical values, so a value that rounds to the same raw is correctly reported as no change
+- **Export** writes every value the description can decode, with `SW-ARRAYSIZE` for real grids, one `SW-AXIS-CONT` per dimension, shared axes as references, and verbal values as their labels
+- Numbers are written at round-trip precision rather than display precision, so re-importing an export does not rewrite the image
+- Dropping a `.cdfx` file on the window opens the same preview
+
+### A2L Constructs Supported
+
+- **Conversions**: `IDENTICAL`, `LINEAR`, `RAT_FUNC`, `TAB_INTP`, `TAB_NOINTP`, `TAB_VERB`, `COMPU_VTAB_RANGE`, and `FORM` with a built-in expression parser (`FORMULA_INV` for the inverse)
+- **Record layouts**: field placement by declared position with `MOD_COMMON` / per-layout **alignment padding**, `RESERVED` fields, `NO_AXIS_PTS_*`, `AXIS_PTS_X/Y/Z/4/5`, `AXIS_RESCALE_X`
+- **Storage order**: `INDEX_INCR` / `INDEX_DECR` per axis, and `ROW_DIR` / `COLUMN_DIR` for function values
+- **`BIT_MASK`** fields, read and written as a read-modify-write so neighbouring fields in the same word survive
+- **`VIRTUAL_CHARACTERISTIC`** — evaluated from its formula and its input parameters, and reported as computed rather than as missing data
+- **`MATRIX_DIM`**, including the pre-1.7 spelling that pads a flat array out to three dimensions
+- Byte order from `MOD_COMMON` or per object; `FORMAT` from the object or its `COMPU_METHOD`
 
 ### Copy Selection to Clipboard
 - **Right-click context menu** on any selected byte range offers six copy formats:
@@ -96,6 +159,8 @@ Fill, Move, Paste and Import each offer two write modes: **overwrite existing**,
 - **Theme**: System / Dark / Light (CSS custom-property based, applied globally)
 - **Font size**: 10 – 20 px slider
 - **Bytes per row**: 8, 16, or 32
+- **Data view columns**: show or hide Address, Type and Raw — the detail pane always shows all of it, so nothing is ever made unreachable
+- **Show measurements**: include MEASUREMENT objects in the data view alongside characteristics
 
 ### OS File Associations
 - **Build-time** associations for Intel HEX and S-record extensions (registered via OS installer / `Info.plist`)
@@ -105,7 +170,7 @@ Fill, Move, Paste and Import each offer two write modes: **overwrite existing**,
   - Linux: `xdg-mime default`
 
 ### User Interface
-- Native **macOS menu bar** — File (Open, Save as, Export as HTML, Import Binary, Compare with…), Edit (Undo, Redo, Cut, Paste, Delete, Select Range, Fill, Move, Import from File, Insert Checksum), Search, View, Preferences
+- Native **macOS menu bar** — File (Open, Save as, Export as HTML, Import Binary, Load A2L, Import/Export Calibration Data, Compare with…), Edit (Undo, Redo, Cut, Paste, Delete, Select Range, Fill, Move, Import from File, Insert Checksum), Search, View, Preferences
   - The system-injected **Writing Tools** and **AutoFill** items are removed from the Edit menu, which are meaningless for a hex editor
 - **Toolbar** with icon buttons: Open · Save · Export HTML · [divider] · Find · Go to Address · [divider] · Compare · [divider] · Undo · Redo · Select Range · Fill · Move · Checksum · Import Merge · [auto-spacer] · Settings
   - Edit icons are **context-aware**: those needing a selection stay disabled until one exists, and Undo/Redo follow the history
@@ -130,6 +195,8 @@ Fill, Move, Paste and Import each offer two write modes: **overwrite existing**,
 | Build tool | [Vite](https://vitejs.dev) | 6.x |
 | Backend / commands | [Rust](https://rust-lang.org) | stable (1.94+) |
 | IHex parsing | [`ihex`](https://crates.io/crates/ihex) crate | 3.0 |
+| A2L parsing | [`a2lfile`](https://crates.io/crates/a2lfile) crate | 3.5 |
+| CDFX (XML) | [`quick-xml`](https://crates.io/crates/quick-xml) crate | 0.41 |
 | File I/O | [`memmap2`](https://crates.io/crates/memmap2) crate | 0.9 |
 | Serialisation | [`serde`](https://crates.io/crates/serde) + `serde_json` | 1.0 |
 | Native clipboard | [`arboard`](https://crates.io/crates/arboard) crate | 3.x |
@@ -167,13 +234,13 @@ Hot-reload is active for both the Svelte frontend and Rust backend.
 **macOS DMG:**
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/dmg/Hex Studio_0.2.5_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/Hex Studio_0.3.1_aarch64.dmg
 ```
 
 **Windows MSI** (requires Windows or GitHub Actions):
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/msi/Hex Studio_0.2.5_x64_en-US.msi
+# → src-tauri/target/release/bundle/msi/Hex Studio_0.3.1_x64_en-US.msi
 ```
 
 ### Automated releases via GitHub Actions
@@ -181,8 +248,8 @@ npm run tauri build
 Push a version tag to trigger a multi-platform build:
 
 ```bash
-git tag v0.2.5
-git push origin v0.2.5
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 The workflow (`.github/workflows/release.yml`) builds macOS and Windows bundles and publishes them as GitHub Release assets automatically.
@@ -197,6 +264,8 @@ hex-studio/
 │   ├── lib/
 │   │   ├── api.js                # Tauri invoke abstraction layer
 │   │   ├── editOps.js            # Record-level edit primitives + checksums
+│   │   ├── mapGrid.js            # Grid index arithmetic, slicing, shading
+│   │   ├── plot.js               # Screen geometry for the parameter plots
 │   │   ├── hexHtmlExport.js      # Hex viewer HTML report generator
 │   │   └── components/
 │   │       ├── HexViewer.svelte        # Virtual-scrolling hex display + copy menu
@@ -216,7 +285,13 @@ hex-studio/
 │   │       ├── FillDialog.svelte       # Fill selection with pattern or random
 │   │       ├── MoveDialog.svelte       # Relocate selection to a new address
 │   │       ├── ChecksumDialog.svelte   # Checksum algorithm, width, endianness
-│   │       └── ImportMergeDialog.svelte# Merge another file into this one
+│   │       ├── ImportMergeDialog.svelte# Merge another file into this one
+│   │       ├── DataView.svelte         # A2L parameter table + coverage stats
+│   │       ├── ParamDetail.svelte      # Parameter editor, point table, plot
+│   │       ├── MapGrid.svelte          # One 2D slice, preview or editable
+│   │       ├── MapEditor.svelte        # Full-size map grid overlay
+│   │       ├── MapPlot.svelte          # A map as a family of curves
+│   │       └── CdfxImportDialog.svelte # CDFX import preview and statistics
 │   └── routes/
 │       ├── +page.svelte          # App shell and native menu
 │       └── compare/
@@ -229,7 +304,18 @@ hex-studio/
 │   │   ├── file_operations.rs    # File I/O, IHex & SREC writers
 │   │   ├── hex_parser.rs         # Intel HEX parser
 │   │   ├── srec_parser.rs        # Motorola S-record parser
+│   │   ├── a2l.rs                # Tauri bridge to the a2l-data crate
 │   │   └── file_assoc.rs         # OS file association management
+│   ├── crates/a2l-data/          # A2L decoding and encoding (own crate)
+│   │   ├── src/db.rs             # Parsed A2L, object resolution, index maths
+│   │   ├── src/layout.rs         # RECORD_LAYOUT to byte offsets
+│   │   ├── src/convert.rs        # COMPU_METHOD, both directions
+│   │   ├── src/formula.rs        # FORM / VIRTUAL expression parser
+│   │   ├── src/decode.rs         # Bytes to physical values
+│   │   ├── src/encode.rs         # Physical values back to bytes
+│   │   ├── src/cdfx.rs           # ASAM CDF 2.1 read and write
+│   │   ├── src/sync.rs           # CDFX import planning and export
+│   │   └── tests/demo_file.rs    # End-to-end against the ASAM demo pair
 │   ├── icons/                    # Full icon set (icns, ico, png)
 │   ├── capabilities/             # Tauri ACL permissions
 │   └── tauri.conf.json           # App configuration
