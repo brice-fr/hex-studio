@@ -19,6 +19,9 @@ OUT="$ROOT/docs/screenshots"
 ROUTE="$ROOT/src/routes/__shots"
 PORT="${PORT:-5199}"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# 1x keeps the images small enough to live in the repo. Raise to 2 for crisp
+# retina captures if the size is ever worth paying for.
+SCALE="${SCALE:-1}"
 
 [ -f "$DEMO/ASAP2_Demo_V171.a2l" ] || { echo "demo A2L not found in $DEMO" >&2; exit 1; }
 [ -x "$CHROME" ] || { echo "Chrome not found at $CHROME" >&2; exit 1; }
@@ -62,7 +65,7 @@ done
 
 for shot in hex data map; do
   echo "==> capturing $shot"
-  "$CHROME" --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+  "$CHROME" --headless --disable-gpu --hide-scrollbars --force-device-scale-factor="$SCALE" \
     --virtual-time-budget=5000 --window-size=1280,800 \
     --screenshot="$OUT/$shot.png" \
     "http://localhost:$PORT/__shots?shot=$shot" >/dev/null 2>&1
