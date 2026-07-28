@@ -106,6 +106,30 @@ Import and export ASAM CDF 2.1 files. Both entries stay disabled until an A2L **
 - Numbers are written at round-trip precision rather than display precision, so re-importing an export does not rewrite the image
 - Dropping a `.cdfx` file on the window opens the same preview
 
+### Spreadsheet Export
+
+**File > Export Values as Excel…** writes every decoded value to an `.xlsx`, one
+row per value — 673 rows for the ASAM demo description. Export only; nothing
+reads a spreadsheet back.
+
+- The **`Index`** column says where each value sits: `Scalar` or `String` for the
+  single-valued shapes, otherwise a 0-based tuple in A2L dimension order —
+  `(3)` along a curve, `(2,1)` in a map, `(2,1,3,1)` in a `CUBE_4`. The first
+  component varies fastest, matching `MATRIX_DIM` and the storage order.
+- **`Breakpoints`** carries the axis values at that position in the same shape,
+  `(3, 15)`, so a row can be read on its own. A verbal axis reads as its label.
+- A one-dimensional object also gets its breakpoint as a **number**, in
+  `Axis value`, which is what makes a curve chartable in Excel directly.
+- Numbers are written as numbers, not text. That is the reason for a workbook
+  rather than CSV: a comma-separated file opens as a single column wherever the
+  locale expects `;` as the separator and `,` as the decimal mark.
+- Objects that could not be decoded still get a row, with the value columns
+  empty and `In image` saying why, so the export and the object count agree.
+
+Columns: `Name`, `Description`, `Category`, `Index`, `Breakpoints`,
+`Axis value`, `Value`, `Text`, `Unit`, `Address`, `Type`, `Conversion`,
+`Conversion type`, `In image`. The header row is frozen and filtered.
+
 ### A2L Constructs Supported
 
 - **Conversions**: `IDENTICAL`, `LINEAR`, `RAT_FUNC`, `TAB_INTP`, `TAB_NOINTP`, `TAB_VERB`, `COMPU_VTAB_RANGE`, and `FORM` with a built-in expression parser (`FORMULA_INV` for the inverse)
@@ -214,6 +238,7 @@ Import and export ASAM CDF 2.1 files. Both entries stay disabled until an A2L **
 | IHex parsing | [`ihex`](https://crates.io/crates/ihex) crate | 3.0 |
 | A2L parsing | [`a2lfile`](https://crates.io/crates/a2lfile) crate | 3.5 |
 | CDFX (XML) | [`quick-xml`](https://crates.io/crates/quick-xml) crate | 0.41 |
+| Excel export | [`rust_xlsxwriter`](https://crates.io/crates/rust_xlsxwriter) crate | 0.96 |
 | File I/O | [`memmap2`](https://crates.io/crates/memmap2) crate | 0.9 |
 | Serialisation | [`serde`](https://crates.io/crates/serde) + `serde_json` | 1.0 |
 | Native clipboard | [`arboard`](https://crates.io/crates/arboard) crate | 3.x |
@@ -332,6 +357,7 @@ hex-studio/
 │   │   ├── src/encode.rs         # Physical values back to bytes
 │   │   ├── src/cdfx.rs           # ASAM CDF 2.1 read and write
 │   │   ├── src/sync.rs           # CDFX import planning and export
+│   │   ├── src/export.rs         # One row per value, for the spreadsheet
 │   │   └── tests/demo_file.rs    # End-to-end against the ASAM demo pair
 │   ├── icons/                    # Full icon set (icns, ico, png)
 │   ├── capabilities/             # Tauri ACL permissions

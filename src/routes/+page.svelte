@@ -10,7 +10,8 @@
   import { open, save, message } from '@tauri-apps/plugin-dialog';
   import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile,
            a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText,
-           a2lEncodePoint, a2lEncodePointText, cdfxPreview, cdfxExport } from '$lib/api.js';
+           a2lEncodePoint, a2lEncodePointText, cdfxPreview, cdfxExport,
+           a2lExportXlsx } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
@@ -209,6 +210,7 @@
   let a2lUnloadMenuItem     = null;
   let cdfxImportMenuItem    = null;
   let cdfxExportMenuItem    = null;
+  let dataExportMenuItem    = null;
   let hexViewMenuItem       = null;
   let dataViewMenuItem      = null;
 
@@ -229,6 +231,7 @@
   // CDFX needs both halves: the A2L names the parameters, the image holds them.
   $effect(() => { const v = cdfxReady; cdfxImportMenuItem?.setEnabled(v); });
   $effect(() => { const v = cdfxReady; cdfxExportMenuItem?.setEnabled(v); });
+  $effect(() => { const v = cdfxReady; dataExportMenuItem?.setEnabled(v); });
   $effect(() => { const v = viewMode === 'hex';  hexViewMenuItem?.setChecked(v); });
   $effect(() => { const v = viewMode === 'data'; dataViewMenuItem?.setChecked(v); });
 
@@ -575,6 +578,35 @@
 
     const params = new Set(changes.map((c) => c.name)).size;
     status = `Imported ${changes.length} value${changes.length === 1 ? '' : 's'} across ${params} parameter${params === 1 ? '' : 's'}`;
+  }
+
+  /**
+   * Write the decoded values to a spreadsheet.
+   *
+   * Export only, and the whole description rather than the current filter —
+   * a data dump that silently depended on a sidebar selection would be hard to
+   * reproduce. The measurements toggle is honoured because it changes which
+   * objects exist at all, not merely which are shown.
+   */
+  async function handleDataExport() {
+    if (!cdfxReady) return;
+    const suggested = (a2lFileName || 'parameters').replace(/\.a2l$/i, '') + '.xlsx';
+    const path = await save({
+      defaultPath: suggested,
+      filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }],
+    });
+    if (!path) return;
+    cdfxBusy = true;
+    status = 'Exporting values…';
+    try {
+      const n = await a2lExportXlsx(path, records, showMeasurements);
+      status = `Exported ${n.toLocaleString()} value${n === 1 ? '' : 's'} to ${path.split(/[\\/]/).at(-1)}`;
+    } catch (err) {
+      status = '';
+      await message(String(err), { kind: 'error', title: 'Cannot export values' });
+    } finally {
+      cdfxBusy = false;
+    }
   }
 
   async function handleCdfxExport() {
@@ -967,6 +999,7 @@
               await PredefinedMenuItem.new({ item: 'Separator' }),
               (cdfxImportMenuItem = await MenuItem.new({ id: 'cdfx-import', text: 'Import Calibration Data (CDFX)…', enabled: false, action: handleCdfxImportOpen })),
               (cdfxExportMenuItem = await MenuItem.new({ id: 'cdfx-export', text: 'Export Calibration Data (CDFX)…', enabled: false, action: handleCdfxExport })),
+              (dataExportMenuItem = await MenuItem.new({ id: 'data-export', text: 'Export Values as Excel…', enabled: false, action: handleDataExport })),
               await PredefinedMenuItem.new({ item: 'Separator' }),
               (compareMenuItem = await MenuItem.new({ id: 'compare', text: 'Compare with…', enabled: false, action: handleCompareOpen })),
               await PredefinedMenuItem.new({ item: 'Separator' }),

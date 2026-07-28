@@ -268,3 +268,18 @@ export async function cdfxPreview(path, records) {
 export async function cdfxExport(path, records) {
   return invoke('cdfx_export', { path, records });
 }
+
+/**
+ * Write every decoded value to an .xlsx, one row per value.
+ *
+ * A spreadsheet rather than CSV so numbers arrive as numbers: a comma-separated
+ * file opens as a single column in a European Excel, where the separator is `;`
+ * and the decimal mark `,`.
+ * @param {string} path
+ * @param {HexRecord[]} records
+ * @param {boolean} includeMeasurements
+ * @returns {Promise<number>} How many value rows were written.
+ */
+export async function a2lExportXlsx(path, records, includeMeasurements) {
+  return invoke('a2l_export_xlsx', { path, records, includeMeasurements });
+}

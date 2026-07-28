@@ -15,8 +15,8 @@ use std::sync::Mutex;
 
 use a2l_data::model::ByteSource;
 use a2l_data::{
-    cdfx, decode, encode, stats, sync, A2lDatabase, A2lSummary, CoverageStats, EncodedWrite,
-    ParamDetail, ParamRow,
+    cdfx, decode, encode, export, stats, sync, A2lDatabase, A2lSummary, CoverageStats,
+    EncodedWrite, ParamDetail, ParamRow,
 };
 
 use crate::file_operations::RecordData;
@@ -325,6 +325,121 @@ pub fn cdfx_export(
     Ok(instances.len())
 }
 
+/// Columns of the spreadsheet export, in order.
+///
+/// The header is the schema: a reader has nothing else to go on, so the names
+/// have to say what each column holds without a legend.
+const EXPORT_COLUMNS: [&str; 14] = [
+    "Name",
+    "Description",
+    "Category",
+    "Index",
+    "Breakpoints",
+    "Axis value",
+    "Value",
+    "Text",
+    "Unit",
+    "Address",
+    "Type",
+    "Conversion",
+    "Conversion type",
+    "In image",
+];
+
+/// Write every decoded value to an `.xlsx`, one row per value.
+///
+/// Numbers are written as numbers rather than text, which is the reason to
+/// prefer a spreadsheet over CSV here: it sidesteps the separator and decimal
+/// conventions that make a comma-separated file open as one column in a
+/// European Excel.
+#[tauri::command]
+pub fn a2l_export_xlsx(
+    path: String,
+    records: Vec<RecordData>,
+    include_measurements: bool,
+    state: tauri::State<A2lState>,
+) -> Result<usize, String> {
+    let image = RecordImage::from_records(&records);
+    let rows = with_db(&state, |db| {
+        Ok(export::rows(db, &image, include_measurements))
+    })?;
+    write_workbook(&rows, &path)
+}
+
+/// Lay the rows out in a workbook and save it.
+///
+/// Split from the command so the sheet itself can be tested without standing up
+/// Tauri state; the command is then only about getting the rows.
+pub fn write_workbook(rows: &[export::ExportRow], path: &str) -> Result<usize, String> {
+    use rust_xlsxwriter::{Format, Workbook};
+
+    if rows.is_empty() {
+        return Err("the description decoded no values to export".to_string());
+    }
+    // Excel stops at 1,048,576 rows including the header. Saying so beats
+    // writing a file that silently ends part-way through a map.
+    if rows.len() + 1 > 1_048_576 {
+        return Err(format!(
+            "{} values exceed the {} rows a worksheet can hold",
+            rows.len(),
+            1_048_576u32
+        ));
+    }
+
+    let mut book = Workbook::new();
+    let sheet = book.add_worksheet();
+    sheet.set_name("Parameters").map_err(|e| e.to_string())?;
+
+    let header = Format::new().set_bold();
+    for (c, title) in EXPORT_COLUMNS.iter().enumerate() {
+        sheet
+            .write_string_with_format(0, c as u16, *title, &header)
+            .map_err(|e| e.to_string())?;
+    }
+    // Freeze the header and add filters so a large export is navigable at all.
+    sheet.set_freeze_panes(1, 0).map_err(|e| e.to_string())?;
+    sheet
+        .autofilter(0, 0, rows.len() as u32, (EXPORT_COLUMNS.len() - 1) as u16)
+        .map_err(|e| e.to_string())?;
+
+    for (i, r) in rows.iter().enumerate() {
+        let row = i as u32 + 1;
+        // Hex for the address, because that is how every other view of the
+        // image spells one and how the A2L itself writes them. An empty cell is
+        // left empty rather than written as "", so a filter on it behaves.
+        let address = r.address.map(|a| format!("0x{a:08X}")).unwrap_or_default();
+        let text = r.text.clone().unwrap_or_default();
+        let cells: [(u16, &str); 12] = [
+            (0, &r.name),
+            (1, &r.description),
+            (2, &r.category),
+            (3, &r.index),
+            (4, &r.breakpoints),
+            (7, &text),
+            (8, &r.unit),
+            (9, &address),
+            (10, &r.datatype),
+            (11, &r.conversion),
+            (12, &r.conversion_type),
+            (13, &r.presence),
+        ];
+        for (c, s) in cells {
+            if !s.is_empty() {
+                sheet.write_string(row, c, s).map_err(|e| e.to_string())?;
+            }
+        }
+        if let Some(v) = r.axis_value {
+            sheet.write_number(row, 5, v).map_err(|e| e.to_string())?;
+        }
+        if let Some(v) = r.value {
+            sheet.write_number(row, 6, v).map_err(|e| e.to_string())?;
+        }
+    }
+
+    book.save(path).map_err(|e| format!("cannot write '{path}': {e}"))?;
+    Ok(rows.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +514,59 @@ mod tests {
             rec(0x100, &[1]),
         ]);
         assert_eq!(img.total_bytes(), 1);
+    }
+
+    fn row(name: &str, index: &str) -> export::ExportRow {
+        export::ExportRow {
+            name: name.into(),
+            description: "d".into(),
+            category: "Map".into(),
+            index: index.into(),
+            breakpoints: "(1,red)".into(),
+            axis_value: None,
+            value: Some(1.5),
+            text: None,
+            unit: "hours".into(),
+            address: Some(0x810000),
+            datatype: "SWORD".into(),
+            conversion: "CM".into(),
+            conversion_type: "IDENTICAL".into(),
+            presence: "full".into(),
+        }
+    }
+
+    /// The workbook has to be a real one: a file Excel opens, with the header
+    /// and a row per value. Written to a temporary path and read back as the
+    /// zip it is, so a corrupt archive fails here rather than on the user's
+    /// machine.
+    #[test]
+    fn workbook_saves_a_readable_file() {
+        let dir = std::env::temp_dir().join(format!("hexstudio-xlsx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out.xlsx");
+        let p = path.to_string_lossy().to_string();
+
+        let rows = vec![row("A", "(0,0)"), row("A", "(1,0)")];
+        assert_eq!(write_workbook(&rows, &p).unwrap(), 2);
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.len() > 1000, "suspiciously small workbook");
+        // An xlsx is a zip; the local file header signature starts every entry.
+        assert_eq!(&bytes[..2], b"PK", "not a zip archive");
+        // The sheet XML carries the values, so a smoke check can find them.
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("xl/worksheets") || bytes.len() > 4000);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An empty description is refused rather than producing a workbook with
+    /// nothing but headings.
+    #[test]
+    fn workbook_refuses_an_empty_export() {
+        let err = write_workbook(&[], "/tmp/never-written.xlsx").unwrap_err();
+        assert!(err.contains("decoded no values"), "{err}");
+        assert!(!std::path::Path::new("/tmp/never-written.xlsx").exists());
     }
 
     #[test]

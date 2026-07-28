@@ -32,6 +32,7 @@ tauri-plugin-window-state = "2"
 tauri-plugin-clipboard-manager = "2.3.2"
 arboard = { version = "3.6.1", default-features = false }
 a2l-data = { path = "crates/a2l-data" }
+rust_xlsxwriter = "0.96.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

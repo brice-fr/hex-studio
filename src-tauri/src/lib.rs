@@ -214,6 +214,7 @@ pub fn run() {
             a2l::a2l_encode_text,
             a2l::cdfx_preview,
             a2l::cdfx_export,
+            a2l::a2l_export_xlsx,
             a2l::a2l_encode_point,
             a2l::a2l_encode_point_text,
         ])

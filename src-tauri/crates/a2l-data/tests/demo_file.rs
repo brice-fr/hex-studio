@@ -1624,3 +1624,116 @@ fn dump_ui() {
     }
     w("details", serde_json::to_string(&details).unwrap());
 }
+
+// ── Spreadsheet export ───────────────────────────────────────────────────────
+
+/// One row per value, with the object repeated and its position spelled out.
+#[test]
+fn export_emits_one_row_per_value() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = a2l_data::export::rows(&db, &img, false);
+
+    // 46 scalars + 210 curve points + 412 map cells + 4 virtual + 1 string.
+    assert_eq!(rows.len(), 673);
+
+    let of = |n: &str| -> Vec<&a2l_data::export::ExportRow> {
+        rows.iter().filter(|r| r.name == n).collect()
+    };
+
+    // A scalar is one row and says so in the index column.
+    let s = of("ASAM.C.SCALAR.UBYTE.IDENTICAL");
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].index, "Scalar");
+    assert_eq!(s[0].value, Some(20.0));
+    assert_eq!(s[0].category, "Scalar");
+    assert_eq!(s[0].address, Some(0x810000));
+
+    let a = of("ASAM.C.ASCII.UBYTE.NUMBER_42");
+    assert_eq!(a.len(), 1);
+    assert_eq!(a[0].index, "String");
+    assert_eq!(a[0].text.as_deref(), Some("ASAM Test"));
+
+    // A curve gets a row per point, with the breakpoint alongside it.
+    let c = of("ASAM.C.CURVE.STD_AXIS");
+    assert_eq!(c.len(), 8);
+    assert_eq!(c[0].index, "(0)");
+    assert_eq!(c[7].index, "(7)");
+    assert_eq!(c[0].breakpoints, "(-5)");
+    assert_eq!(c[0].axis_value, Some(-5.0), "1D keeps a numeric axis column");
+    assert_eq!(c[0].value, Some(-3.0));
+    assert_eq!(c[0].category, "Curve");
+
+    // A standalone AXIS_PTS object is named as an axis, not a curve.
+    assert_eq!(of("ASAM.C.AXIS_PTS.UBYTE_8")[0].category, "Axis");
+}
+
+/// The tuple has to name the same cell the editor writes, or the export is a
+/// map of somewhere else.
+#[test]
+fn export_tuples_match_the_grid() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = a2l_data::export::rows(&db, &img, false);
+    let cells: Vec<_> = rows
+        .iter()
+        .filter(|r| r.name == "ASAM.C.MAP.STD_AXIS.STD_AXIS")
+        .collect();
+    assert_eq!(cells.len(), 20);
+
+    // 4 x 5, first component fastest: (0,0) (1,0) (2,0) (3,0) (0,1) …
+    let idx: Vec<&str> = cells.iter().take(6).map(|r| r.index.as_str()).collect();
+    assert_eq!(idx, vec!["(0,0)", "(1,0)", "(2,0)", "(3,0)", "(0,1)", "(1,1)"]);
+    assert_eq!(cells[19].index, "(3,4)");
+
+    // The values are 0..19 in that order, so the tuple and the value agree.
+    for (i, c) in cells.iter().enumerate() {
+        assert_eq!(c.value, Some(i as f64), "cell {}", c.index);
+    }
+
+    // Breakpoints ride along, and the verbal Y axis reads as its label.
+    assert_eq!(cells[0].breakpoints, "(1,red)");
+    assert_eq!(cells[5].breakpoints, "(2,orange)");
+    assert!(cells[0].axis_value.is_none(), "a map has no single axis column");
+    // The table blanks a map's unit because its cell shows a shape; a row that
+    // holds one value has to carry it.
+    assert_eq!(cells[0].unit, "hours");
+
+    // A cuboid extends to three components without new columns.
+    let cub: Vec<_> = rows.iter().filter(|r| r.name == "ASAM.C.CUBOID.ROW_DIR").collect();
+    assert_eq!(cub.len(), 24);
+    assert_eq!(cub[0].index, "(0,0,0)");
+    assert_eq!(cub[1].index, "(1,0,0)");
+    assert_eq!(cub[2].index, "(0,1,0)");
+    assert_eq!(cub[23].index, "(1,2,3)");
+
+    // And a CUBE_4 to four.
+    let c4: Vec<_> = rows.iter().filter(|r| r.name == "ASAM.C.CUBE_4.ROW_DIR").collect();
+    assert_eq!(c4.len(), 48);
+    assert_eq!(c4[0].index, "(0,0,0,0)");
+    assert_eq!(c4[47].index, "(1,2,3,1)");
+}
+
+/// A computed parameter has no address, and nothing is silently dropped.
+#[test]
+fn export_keeps_what_it_cannot_decode() {
+    let Some((db, img)) = open_demo() else { return };
+    let rows = a2l_data::export::rows(&db, &img, false);
+
+    let virt: Vec<_> = rows.iter().filter(|r| r.category == "Virtual").collect();
+    assert_eq!(virt.len(), 4);
+    assert!(
+        virt.iter().all(|r| r.address.is_none()),
+        "a VIRTUAL_CHARACTERISTIC's declared address is a placeholder"
+    );
+
+    // Every object in the description is represented at least once.
+    let named: std::collections::BTreeSet<&str> =
+        rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(named.len(), 89, "one entry per object, none dropped");
+
+    for r in &rows {
+        assert!(
+            ["full", "partial", "absent", "unknown"].contains(&r.presence.as_str()),
+            "{}: odd presence {:?}", r.name, r.presence
+        );
+    }
+}
