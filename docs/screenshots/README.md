@@ -12,9 +12,10 @@ app's own components against that data through `harness.svelte`, and captures
 each scene with headless Chrome. The harness route is created under
 `src/routes/__shots` and removed again, so nothing extra ships in the built app.
 
-Captures are 1280×800 at 1×, which keeps all three images under half a megabyte
-so they can live in the repository. `SCALE=2` gives crisp retina captures at
-roughly 2.4× the size, if that is ever worth paying for.
+Captures are 1280×800 at 1× in the light theme, which keeps all three images
+under half a megabyte and reads against GitHub's own light default. `SCALE=2`
+gives crisp retina captures at roughly 2.4× the size; `THEME=dark` gives the
+other theme.
 
 The images therefore show **real decoded values** rather than mock-ups — the
 numbers in them come from `ASAP2_Demo_V171.hex` read through

@@ -28,10 +28,10 @@
   };
   const scene = SCENES[shot] ?? SCENES.data;
 
-  // Dark by default: it is how the app is usually run and it reads well
-  // against both GitHub themes.
+  // capture.sh passes the theme; light is the default when the harness is
+  // opened by hand, matching what the README ships.
   if (typeof document !== 'undefined') {
-    document.documentElement.setAttribute('data-theme', q.get('theme') ?? 'dark');
+    document.documentElement.setAttribute('data-theme', q.get('theme') ?? 'light');
   }
 
   let selected = $state(scene.sel);
