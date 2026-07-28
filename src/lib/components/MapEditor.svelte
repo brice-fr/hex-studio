@@ -295,12 +295,15 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    /* The card cannot be narrower than its header, so a small grid would
+       otherwise sit against the left edge with the rest of the row empty. */
+    justify-content: center;
     /* Wide enough to be worth opening, but never taller than the card. */
     max-height: calc(100vh - 210px);
   }
 
   .body :global(.grid-wrap) {
-    flex: 1;
+    flex: 0 1 auto;
     min-height: 0;
   }
 </style>

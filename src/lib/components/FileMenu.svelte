@@ -455,21 +455,47 @@
 
   .a2l-x:hover { opacity: 1; }
 
+  /* The toolbar paints its own colours rather than reading the theme
+     variables, so it has to resolve the theme the same way the app shell
+     does: an explicit choice wins, and the OS preference applies only when
+     none was made. Keying on the media query alone left the toolbar light
+     over a dark app whenever Preferences disagreed with the system.
+
+     The root part must be :global — :root is not in this component's
+     markup, so Svelte's scoping pass drops the whole rule as unreachable
+     and the light theme silently loses its colours. */
   @media (prefers-color-scheme: light) {
-    .toolbar  { background: #f3f3f3; border-bottom-color: #ddd; }
-    .icon-btn { color: #424242; }
-    .icon-btn:hover:not(:disabled) { background: #e0e0e0; color: #1e1e1e; }
-    .divider  { background: #ddd; }
-    .seg      { border-color: #c4c4c4; }
-    .seg-btn  { color: #424242; }
-    .seg-btn:hover:not(:disabled):not(.on) { background: #e0e0e0; color: #1e1e1e; }
-    .seg-btn.on { background: #0070c1; color: #fff; }
-    .a2l-drop { border-color: #c4c4c4; color: #777; }
-    .a2l-drop:hover:not(:disabled) { border-color: #0070c1; color: #333; }
-    .a2l-chip {
+  :global(:root:not([data-theme="dark"])) .toolbar  { background: #f3f3f3; border-bottom-color: #ddd; }
+  :global(:root:not([data-theme="dark"])) .icon-btn { color: #424242; }
+  :global(:root:not([data-theme="dark"])) .icon-btn:hover:not(:disabled) { background: #e0e0e0; color: #1e1e1e; }
+  :global(:root:not([data-theme="dark"])) .divider  { background: #ddd; }
+  :global(:root:not([data-theme="dark"])) .seg      { border-color: #c4c4c4; }
+  :global(:root:not([data-theme="dark"])) .seg-btn  { color: #424242; }
+  :global(:root:not([data-theme="dark"])) .seg-btn:hover:not(:disabled):not(.on) { background: #e0e0e0; color: #1e1e1e; }
+  :global(:root:not([data-theme="dark"])) .seg-btn.on { background: #0070c1; color: #fff; }
+  :global(:root:not([data-theme="dark"])) .a2l-drop { border-color: #c4c4c4; color: #777; }
+  :global(:root:not([data-theme="dark"])) .a2l-drop:hover:not(:disabled) { border-color: #0070c1; color: #333; }
+  :global(:root:not([data-theme="dark"])) .a2l-chip {
       background: rgba(0, 128, 120, 0.10);
       border-color: rgba(0, 128, 120, 0.35);
       color: #00706a;
     }
   }
+
+  :global(:root[data-theme="light"]) .toolbar  { background: #f3f3f3; border-bottom-color: #ddd; }
+  :global(:root[data-theme="light"]) .icon-btn { color: #424242; }
+  :global(:root[data-theme="light"]) .icon-btn:hover:not(:disabled) { background: #e0e0e0; color: #1e1e1e; }
+  :global(:root[data-theme="light"]) .divider  { background: #ddd; }
+  :global(:root[data-theme="light"]) .seg      { border-color: #c4c4c4; }
+  :global(:root[data-theme="light"]) .seg-btn  { color: #424242; }
+  :global(:root[data-theme="light"]) .seg-btn:hover:not(:disabled):not(.on) { background: #e0e0e0; color: #1e1e1e; }
+  :global(:root[data-theme="light"]) .seg-btn.on { background: #0070c1; color: #fff; }
+  :global(:root[data-theme="light"]) .a2l-drop { border-color: #c4c4c4; color: #777; }
+  :global(:root[data-theme="light"]) .a2l-drop:hover:not(:disabled) { border-color: #0070c1; color: #333; }
+  :global(:root[data-theme="light"]) .a2l-chip {
+      background: rgba(0, 128, 120, 0.10);
+      border-color: rgba(0, 128, 120, 0.35);
+      color: #00706a;
+    }
+
 </style>

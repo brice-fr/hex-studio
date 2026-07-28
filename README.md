@@ -6,6 +6,23 @@ Load an **ASAM MCD-2 MC (A2L)** description alongside the image and it also beco
 
 ---
 
+![The data view: an A2L description turns the image into named parameters, with coverage statistics, category filters and a plot of the selected curve](docs/screenshots/data.png)
+
+<table>
+<tr>
+<td width="50%"><a href="docs/screenshots/hex.png"><img src="docs/screenshots/hex.png" alt="The hex view at the calibration block, showing bytes, ASCII and segment boundaries"></a></td>
+<td width="50%"><a href="docs/screenshots/map.png"><img src="docs/screenshots/map.png" alt="The map editor: a shaded 4x5 grid with verbal row labels, and each row plotted as a curve"></a></td>
+</tr>
+<tr>
+<td align="center"><em>Hex view — bytes, ASCII and segment gaps</em></td>
+<td align="center"><em>Map editor — shaded grid, verbal axis, curves per row</em></td>
+</tr>
+</table>
+
+<sup>Screenshots show real values decoded from the ASAM ASAP2 demo image; regenerate with <a href="docs/screenshots/capture.sh"><code>docs/screenshots/capture.sh</code></a>.</sup>
+
+---
+
 ## Features
 
 ### File Handling

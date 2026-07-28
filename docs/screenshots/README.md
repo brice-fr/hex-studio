@@ -1,0 +1,37 @@
+# Screenshots
+
+The images in the project README are generated, not captured by hand, so they
+can be refreshed whenever the UI changes.
+
+```bash
+./docs/screenshots/capture.sh
+```
+
+`capture.sh` decodes the ASAM demo pair with the real Rust backend, renders the
+app's own components against that data through `harness.svelte`, and captures
+each scene with headless Chrome at 2× for retina displays. The harness route is
+created under `src/routes/__shots` and removed again, so nothing extra ships in
+the built app.
+
+The images therefore show **real decoded values** rather than mock-ups — the
+numbers in them come from `ASAP2_Demo_V171.hex` read through
+`ASAP2_Demo_V171.a2l`.
+
+## Requirements
+
+- The ASAM demo pair, which is ASAM-licensed and not vendored here. Point
+  `A2L_DEMO_DIR` at a directory holding `ASAP2_Demo_V171.a2l` and
+  `ASAP2_Demo_V171.hex` (defaults to `~/Downloads/ECU_Description`).
+- Google Chrome, for `--headless --screenshot`. Override with `CHROME=`.
+- A free port for the dev server; override with `PORT=`.
+
+## Scenes
+
+| File | Shows |
+|------|-------|
+| `hex.png` | The hex view at the calibration block — the rest of the image is `FF` padding and says nothing |
+| `data.png` | The data view: coverage banner, categories, parameter table, and a curve with its plot |
+| `map.png` | The map editor: shaded grid, verbal row labels, and the family-of-curves plot |
+
+Add a scene by extending `SCENES` in `harness.svelte` and the `for shot in …`
+loop in `capture.sh`.

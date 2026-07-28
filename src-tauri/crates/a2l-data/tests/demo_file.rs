@@ -1602,3 +1602,25 @@ fn a_verbal_axis_can_be_written() {
     // An unknown label is refused rather than written as zero.
     assert!(encode_point_text(&db, &img, name, PointTarget::Axis(1), 0, "puce").is_err());
 }
+
+/// Dumps everything the data view renders, for the README screenshot harness.
+/// Run with `DUMP_TO=<dir> cargo test -p a2l-data --test demo_file dump_ui -- --ignored`.
+#[test]
+#[ignore = "dumps decoded demo data for the screenshot harness"]
+fn dump_ui() {
+    let Some((db, img)) = open_demo() else { return };
+    let dir = std::env::var("DUMP_TO").expect("DUMP_TO");
+    let w = |n: &str, v: String| std::fs::write(format!("{dir}/{n}.json"), v).unwrap();
+
+    w("rows", serde_json::to_string(&decode::list_rows(&db, &img, false)).unwrap());
+    w("stats", serde_json::to_string(&stats::compute(&db, &img, false)).unwrap());
+    let mut details = std::collections::BTreeMap::new();
+    for n in [
+        "ASAM.C.CURVE.STD_AXIS",
+        "ASAM.C.MAP.STD_AXIS.STD_AXIS",
+        "ASAM.C.CUBOID.ROW_DIR",
+    ] {
+        details.insert(n, decode::detail_for(&db, &img, n).expect(n));
+    }
+    w("details", serde_json::to_string(&details).unwrap());
+}
