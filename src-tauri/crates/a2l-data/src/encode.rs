@@ -164,6 +164,55 @@ pub fn encode_point(
     index: u32,
     phys: f64,
 ) -> Result<EncodedWrite, String> {
+    encode_point_inner(db, src, name, target, index, PointInput::Num(phys))
+}
+
+/// Write one point given a label rather than a number.
+///
+/// A verbal conversion has no numeric inverse — `to_raw` returns None for it —
+/// but a label does map back to a raw through `text_to_raw`. Without this the
+/// verbal axes and value blocks that `is_invertible` reports as editable would
+/// refuse every value they were given.
+pub fn encode_point_text(
+    db: &A2lDatabase,
+    src: &dyn ByteSource,
+    name: &str,
+    target: PointTarget,
+    index: u32,
+    text: &str,
+) -> Result<EncodedWrite, String> {
+    encode_point_inner(db, src, name, target, index, PointInput::Text(text))
+}
+
+/// What the caller supplied for a point: a physical value or a label.
+#[derive(Clone, Copy)]
+enum PointInput<'a> {
+    Num(f64),
+    Text(&'a str),
+}
+
+impl PointInput<'_> {
+    /// Invert through `conv`, by the route the input actually has.
+    fn to_raw(&self, conv: &crate::convert::Conversion, conv_name: &str) -> Result<f64, String> {
+        match self {
+            PointInput::Num(v) => conv
+                .to_raw(*v)
+                .ok_or_else(|| format!("conversion '{conv_name}' cannot be inverted")),
+            PointInput::Text(t) => conv
+                .text_to_raw(t)
+                .ok_or_else(|| format!("'{t}' is not a value of conversion '{conv_name}'")),
+        }
+    }
+}
+
+fn encode_point_inner(
+    db: &A2lDatabase,
+    src: &dyn ByteSource,
+    name: &str,
+    target: PointTarget,
+    index: u32,
+    input: PointInput,
+) -> Result<EncodedWrite, String> {
     let plan = db
         .plan_any(name)
         .ok_or_else(|| format!("'{name}' not found in the A2L description"))?;
@@ -187,12 +236,16 @@ pub fn encode_point(
         // The paired index is a position in the virtual axis, not a physical
         // quantity, so only the axis half goes through the conversion.
         let raw = if target.is_value() {
-            phys
+            // The paired element is an index into the virtual full axis, not a
+            // physical quantity, so it neither converts nor names anything.
+            match input {
+                PointInput::Num(v) => v,
+                PointInput::Text(_) => {
+                    return Err("a rescale index is a position, not a label".to_string())
+                }
+            }
         } else {
-            plan.conv
-                .conversion
-                .to_raw(phys)
-                .ok_or_else(|| format!("conversion '{}' cannot be inverted", plan.conv.name))?
+            input.to_raw(&plan.conv.conversion, &plan.conv.name)?
         };
         return element_write(&plan, field, slot, raw, &plan.conv.conversion);
     }
@@ -259,9 +312,7 @@ pub fn encode_point(
         return Err(format!("point {index} is past the end ({extent} points)"));
     }
 
-    let raw = conv
-        .to_raw(phys)
-        .ok_or_else(|| format!("conversion '{}' cannot be inverted", plan.conv.name))?;
+    let raw = input.to_raw(conv, &plan.conv.name)?;
     element_write(&plan, field, slot, raw, conv)
 }
 

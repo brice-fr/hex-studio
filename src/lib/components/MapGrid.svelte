@@ -93,6 +93,24 @@
     invalid = false;
   }
 
+  /** Labels for a dimension's breakpoints, or null when it is numeric. */
+  const xOptions = $derived(axes[0]?.enum_options ?? null);
+  const yOptions = $derived(axes[1]?.enum_options ?? null);
+  const valueOptions = $derived(detail?.value_options ?? null);
+
+  /**
+   * Commit a chosen label.
+   *
+   * A verbal conversion has no numeric inverse, so the label goes through as
+   * text rather than being turned into the raw here — the backend owns that
+   * table and this side has no business guessing at it.
+   */
+  function choose(target, index, label) {
+    editing = null;
+    invalid = false;
+    onEditPoint(target, index, label);
+  }
+
   /** Commit `draft` to `target`, refusing anything that is not a number. */
   function commit(target, index) {
     const t = draft.trim();
@@ -138,6 +156,15 @@
                   spellcheck="false"
                   autofocus
                 />
+              {:else if xAccess.editable && !compact && xOptions}
+                <select
+                  class="pick"
+                  value={xHeads[x]}
+                  onchange={(e) => choose({ axis: 0 }, x, e.currentTarget.value)}
+                  aria-label="X breakpoint {x}"
+                >
+                  {#each xOptions as opt}<option value={opt}>{opt}</option>{/each}
+                </select>
               {:else if xAccess.editable && !compact}
                 <button class="hbtn" onclick={() => begin(`axis:0:${x}`, axes[0]?.points[x]?.phys)}
                         title="Edit X breakpoint {x}">{xHeads[x]}</button>
@@ -169,6 +196,15 @@
                   spellcheck="false"
                   autofocus
                 />
+              {:else if yAccess.editable && !compact && yOptions}
+                <select
+                  class="pick"
+                  value={yHeads[y]}
+                  onchange={(e) => choose({ axis: 1 }, y, e.currentTarget.value)}
+                  aria-label="Y breakpoint {y}"
+                >
+                  {#each yOptions as opt}<option value={opt}>{opt}</option>{/each}
+                </select>
               {:else if yAccess.editable && !compact}
                 <button class="hbtn" onclick={() => begin(`axis:1:${y}`, axes[1]?.points[y]?.phys)}
                         title="Edit Y breakpoint {y}">{yHeads[y]}</button>
@@ -196,6 +232,15 @@
                     spellcheck="false"
                     autofocus
                   />
+                {:else if valuesEditable && valueOptions}
+                  <select
+                    class="pick"
+                    value={pt?.display}
+                    onchange={(e) => choose('value', index, e.currentTarget.value)}
+                    aria-label="Value at index {index}"
+                  >
+                    {#each valueOptions as opt}<option value={opt}>{opt}</option>{/each}
+                  </select>
                 {:else if valuesEditable}
                   <button class="cbtn" onclick={() => begin(`value:${index}`, pt?.phys)}
                           title="Edit">{fmt(pt)}</button>
@@ -371,6 +416,28 @@
   }
 
   .cell-input.invalid { border-color: var(--c-err, #e05555); }
+
+  /* A verbal breakpoint is picked from its table rather than typed: the raw
+     number behind "green" is an implementation detail of the COMPU_METHOD. */
+  .pick {
+    position: relative;
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 2px 4px;
+    font: inherit;
+    text-align: center;
+    color: inherit;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    appearance: none;
+  }
+
+  .pick:hover  { background: var(--c-hover); }
+  .pick:focus  { outline: 1px solid var(--c-accent); }
+  .cell .pick  { text-align: right; }
 
   .more {
     padding: 2px 6px;

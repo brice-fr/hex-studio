@@ -208,6 +208,23 @@ export async function a2lEncodePoint(name, target, index, phys, records) {
 }
 
 /**
+ * Encode one point from an enumeration label.
+ *
+ * A verbal conversion has no numeric inverse, so a breakpoint or value picked
+ * from `enum_options` is written by name. `target` takes the same forms as
+ * a2lEncodePoint: `'value'`, `'axis'`, or `{axis: n}` for a map's dimension.
+ * @param {string} name
+ * @param {'value'|'axis'|{axis: number}} target
+ * @param {number} index
+ * @param {string} text
+ * @param {HexRecord[]} records
+ * @returns {Promise<{address: number, bytes: number[], raw: number, phys: number}>}
+ */
+export async function a2lEncodePointText(name, target, index, text, records) {
+  return invoke('a2l_encode_point_text', { name, target, index, text, records });
+}
+
+/**
  * @typedef {Object} CdfxChange
  * @property {string} name           A2L object name.
  * @property {'value'|'axis'|'text'} target

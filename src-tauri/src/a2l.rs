@@ -246,6 +246,25 @@ pub fn a2l_encode_point(
     })
 }
 
+/// Encode one point of a 1D or multi-dimensional object from a label.
+///
+/// A verbal conversion has no numeric inverse, so a breakpoint or value chosen
+/// from an enumeration is written by name rather than by number.
+#[tauri::command]
+pub fn a2l_encode_point_text(
+    name: String,
+    target: encode::PointTarget,
+    index: u32,
+    text: String,
+    records: Vec<RecordData>,
+    state: tauri::State<A2lState>,
+) -> Result<EncodedWrite, String> {
+    let image = RecordImage::from_records(&records);
+    with_db(&state, |db| {
+        encode::encode_point_text(db, &image, &name, target, index, &text)
+    })
+}
+
 /// Encode a textual value — an enum label or an ASCII string — into bytes.
 #[tauri::command]
 pub fn a2l_encode_text(

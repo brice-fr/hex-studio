@@ -10,7 +10,7 @@
   import { open, save, message } from '@tauri-apps/plugin-dialog';
   import { openFile, parseIntelHex, parseSrec, detectFileFormat, saveFile, saveBinary, getStartupFile,
            a2lLoad, a2lUnload, a2lList, a2lDetail, a2lStats, a2lEncodeValue, a2lEncodeText,
-           a2lEncodePoint, cdfxPreview, cdfxExport } from '$lib/api.js';
+           a2lEncodePoint, a2lEncodePointText, cdfxPreview, cdfxExport } from '$lib/api.js';
   import { listen } from '@tauri-apps/api/event';
   import {
     cloneRecords, deleteRange, writeBytes, writeBytesEmpty,
@@ -508,16 +508,26 @@
     }
   }
 
-  /** Edit one point of a 1D object. `index` is the row as displayed. */
-  async function handleA2lEditPoint(name, target, index, phys) {
+  /**
+   * Edit one point of a 1D or multi-dimensional object.
+   *
+   * `index` is the position as displayed; the backend maps it back to storage.
+   * `value` is a number, or a label when the conversion is verbal — those have
+   * no numeric inverse, so they are written by name through a separate command.
+   */
+  async function handleA2lEditPoint(name, target, index, value) {
+    const where = typeof target === 'object' && target !== null
+      ? `axis ${target.axis}`
+      : target;
     try {
-      const encoded = await a2lEncodePoint(name, target, index, phys, records);
+      const encoded = typeof value === 'string'
+        ? await a2lEncodePointText(name, target, index, value, records)
+        : await a2lEncodePoint(name, target, index, value, records);
       pushUndo(`Edit ${name}[${index}]`);
       records = writeBytes(records, encoded.address, encoded.bytes);
-      const label = target === 'axis' ? 'axis' : 'value';
-      status = `${name} ${label}[${index}] → ${encoded.phys}`;
+      status = `${name} ${where}[${index}] → ${value}`;
     } catch (err) {
-      status = `Cannot write ${name}[${index}]: ${err}`;
+      status = `Cannot write ${name} ${where}[${index}]: ${err}`;
     }
   }
 

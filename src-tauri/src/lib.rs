@@ -215,6 +215,7 @@ pub fn run() {
             a2l::cdfx_preview,
             a2l::cdfx_export,
             a2l::a2l_encode_point,
+            a2l::a2l_encode_point_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

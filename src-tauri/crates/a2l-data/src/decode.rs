@@ -742,6 +742,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             address: plan.address,
             byte_size: size,
             axes: vec![crate::model::AxisDetail {
+                enum_options: None,
                 points: axis.clone(),
                 unit: plan.display_unit().to_string(),
                 kind: "RES_AXIS".to_string(),
@@ -752,6 +753,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             axis,
             values,
             axis_unit: plan.display_unit().to_string(),
+            value_options: None,
             value_unit: "index".to_string(),
             axis_kind: "RES_AXIS".to_string(),
             axis_ref: None,
@@ -821,6 +823,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
             && conv.is_invertible();
 
         axes.push(crate::model::AxisDetail {
+            enum_options: conv.enum_options(),
             points: reverse_if(stored, plan.dim_reversed(d)),
             unit: spec.conv.as_ref().map(|c| c.unit.clone()).unwrap_or_default(),
             kind: spec.kind.to_string(),
@@ -855,6 +858,7 @@ pub fn detail_for(db: &A2lDatabase, src: &dyn ByteSource, name: &str) -> Option<
         dims,
         axes,
         value_unit: plan.display_unit().to_string(),
+        value_options: plan.conv.conversion.enum_options(),
         values_editable: editable_points && plan.conv.conversion.is_invertible(),
         bytes,
     })

@@ -164,6 +164,10 @@ pub struct AxisDetail {
     pub reference: Option<String>,
     /// Whether these breakpoints can be written through this object.
     pub editable: bool,
+    /// Every label a verbal conversion accepts, in table order. `None` for a
+    /// numeric axis. A breakpoint chosen from this list is written by name,
+    /// since a verbal conversion has no numeric inverse.
+    pub enum_options: Option<Vec<String>>,
 }
 
 /// Full detail for one object, fetched on selection.
@@ -194,6 +198,8 @@ pub struct ParamDetail {
     /// The object this axis defers to, for COM_AXIS/RES_AXIS (an AXIS_PTS) and
     /// CURVE_AXIS (a characteristic). `None` when the axis is self-contained.
     pub axis_ref: Option<String>,
+    /// Labels the function values accept, when their conversion is verbal.
+    pub value_options: Option<Vec<String>>,
     /// Whether each column of the point table accepts edits. An axis stored in
     /// another object is edited there, and a computed one not at all.
     pub values_editable: bool,

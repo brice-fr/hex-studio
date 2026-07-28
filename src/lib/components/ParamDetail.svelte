@@ -565,8 +565,10 @@
                 <tr>
                   <td class="i">{p.i}</td>
                   {#each [
-                    { target: 'axis',  pt: p.axis,  cls: 'ax', can: detail?.axis_editable },
-                    { target: 'value', pt: p.value, cls: 'r',  can: detail?.values_editable },
+                    { target: 'axis',  pt: p.axis,  cls: 'ax', can: detail?.axis_editable,
+                      opts: detail?.axes?.[0]?.enum_options ?? null },
+                    { target: 'value', pt: p.value, cls: 'r',  can: detail?.values_editable,
+                      opts: detail?.value_options ?? null },
                   ] as col}
                     <td class={col.cls}>
                       {#if !col.pt}
@@ -583,6 +585,17 @@
                           spellcheck="false"
                           autofocus
                         />
+                      {:else if col.can && col.opts}
+                        <!-- A verbal point is picked from its table: the raw
+                             behind the label belongs to the COMPU_METHOD. -->
+                        <select
+                          class="pick"
+                          value={col.pt.display}
+                          onchange={(e) => onEditPoint(col.target, p.i, e.currentTarget.value)}
+                          aria-label="{col.target} at point {p.i}"
+                        >
+                          {#each col.opts as opt}<option value={opt}>{opt}</option>{/each}
+                        </select>
                       {:else if col.can}
                         <button
                           class="cell"
@@ -893,6 +906,24 @@
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.5px;
   }
+
+  .pick {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 1px 4px;
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    appearance: none;
+    text-align: right;
+  }
+
+  .pick:hover { background: var(--c-hover); }
+  .pick:focus { outline: 1px solid var(--c-accent); }
 
   .open-map {
     align-self: flex-start;

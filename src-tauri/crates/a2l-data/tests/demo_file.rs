@@ -1565,3 +1565,40 @@ fn point_count_marks_exactly_the_objects_with_an_array() {
         }
     }
 }
+
+/// A verbal axis is offered as editable, so writing one must actually work.
+///
+/// `is_invertible` says yes for a verbal conversion — a label does map back to
+/// a raw — but it maps through `text_to_raw`, not `to_raw`, which returns None
+/// for anything verbal. Offering the edit and then refusing every value is the
+/// worst of both.
+#[test]
+fn a_verbal_axis_can_be_written() {
+    let Some((db, img)) = open_demo() else { return };
+    use a2l_data::encode::{encode_point, encode_point_text, PointTarget};
+
+    let name = "ASAM.C.MAP.STD_AXIS.STD_AXIS";
+    let detail = decode::detail_for(&db, &img, name).expect("detail");
+
+    // The Y axis renders labels, and the pane reports it as writable.
+    let y = &detail.axes[1];
+    assert!(y.editable, "the demo's verbal Y axis is offered as editable");
+    let labels: Vec<&str> = y.points.iter().map(|p| p.display.as_str()).collect();
+    assert_eq!(labels, vec!["red", "orange", "yellow", "green", "blue"]);
+
+    // A number cannot be inverted through a verbal conversion…
+    assert!(
+        encode_point(&db, &img, name, PointTarget::Axis(1), 0, 3.0).is_err(),
+        "a verbal conversion has no numeric inverse"
+    );
+
+    // …but a label can, and must land on the byte that breakpoint occupies.
+    let w = encode_point_text(&db, &img, name, PointTarget::Axis(1), 0, "green")
+        .expect("a label is writable");
+    let before = img.read(w.address, 1).expect("in image")[0];
+    assert_eq!(f64::from(before as i8), y.points[0].phys, "targets the right byte");
+    assert_ne!(w.bytes[0], before, "green is not what row 0 already holds");
+
+    // An unknown label is refused rather than written as zero.
+    assert!(encode_point_text(&db, &img, name, PointTarget::Axis(1), 0, "puce").is_err());
+}
