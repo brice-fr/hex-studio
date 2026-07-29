@@ -18,7 +18,9 @@
    *   shaded       – colour cells on a value ramp
    *   slice        – subscripts for dimensions 2 and up
    *   highlight    – row index to mark, or null; linked to the plot
+   *   locked       – true when `highlight` is pinned rather than hovered
    *   onHoverRow   – (row: number|null) => void
+   *   onLockRow    – (row: number|null) => void   pin a row to the plot
    *   onEditPoint  – (target, index, phys) => void
    *   onNavigate   – (name) => void   select another parameter
    */
@@ -31,7 +33,9 @@
     shaded      = true,
     slice       = /** @type {number[]} */ ([]),
     highlight   = /** @type {number|null} */ (null),
+    locked      = false,
     onHoverRow  = (_row) => {},
+    onLockRow   = (_row) => {},
     onEditPoint = (_target, _index, _phys) => {},
     onNavigate  = (_name) => {},
   } = $props();
@@ -183,7 +187,18 @@
             onpointerenter={() => onHoverRow(y)}
             onpointerleave={() => onHoverRow(null)}
           >
-            <th class="yh" class:ro={!yAccess.editable} title={yAccess.why || `Y ${y}`}>
+            <!-- The click also reaches here from the label control inside, so
+                 pinning works whether or not the breakpoint is editable, and
+                 editing one implies you are working on that row anyway. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <th
+              class="yh"
+              class:ro={!yAccess.editable}
+              class:pinned={locked && highlight === y}
+              title={yAccess.why || `Y ${y} — click to pin this row to the plot`}
+              onclick={() => onLockRow(locked && highlight === y ? null : y)}
+            >
               {#if editing === `axis:1:${y}`}
                 <!-- svelte-ignore a11y_autofocus -->
                 <input
@@ -358,6 +373,10 @@
 
   /* The row traced in the plot below, so the two read as one view. */
   tr.traced .yh { color: var(--c-accent); }
+  .yh { cursor: pointer; }
+  /* A pinned row stays marked once the pointer has gone elsewhere, which is
+     the whole point of pinning it. */
+  .yh.pinned { box-shadow: inset 2px 0 0 var(--c-accent); }
   tr.traced .cell { box-shadow: inset 0 -1px 0 var(--c-accent), inset 0 1px 0 var(--c-accent); }
 
   .cell {

@@ -72,24 +72,32 @@ export function buildPlot(series, { width, height, pad, yRange = null }) {
 }
 
 /**
- * The plotted point nearest `x` in screen pixels, across every series.
+ * The plotted point nearest a screen position.
  *
- * Nearest in x alone rather than true distance: these plots are read by
- * sweeping across the axis, and matching on x keeps the readout from jumping
- * between curves that happen to cross.
- * @returns {{series: number, point: object} | null}
+ * With `y` omitted the match is on x alone, which is how a single curve is
+ * read — sweeping along the axis, with no second series to be confused with.
+ *
+ * A family of curves needs `y` as well. Every row shares the same x positions,
+ * so matching on x alone makes the distance identical for all of them and the
+ * first series always wins: with a dozen curves on screen, eleven of them
+ * cannot be pointed at.
+ *
+ * @param {number|null} y  Screen y, or null to match on x alone.
+ * @param {number|null} seriesFilter  Restrict to one series, when one is locked.
+ * @returns {{series: number, point: object, distance: number} | null}
  */
-export function nearestPoint(plot, x, seriesFilter = null) {
+export function nearestPoint(plot, x, y = null, seriesFilter = null) {
   if (!plot) return null;
   let best = null;
   let bestD = Infinity;
   for (const s of plot.series) {
     if (seriesFilter !== null && s.index !== seriesFilter) continue;
     for (const p of s.points) {
-      const d = Math.abs(p.cx - x);
+      const dx = p.cx - x;
+      const d = y === null ? Math.abs(dx) : Math.hypot(dx, p.cy - y);
       if (d < bestD) {
         bestD = d;
-        best = { series: s.index, point: p };
+        best = { series: s.index, point: p, distance: d };
       }
     }
   }

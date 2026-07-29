@@ -41,8 +41,17 @@
   let below = $state(/** @type {'curves'|'surface'|'none'} */ ('curves'));
 
   /** The row traced in the plot and marked in the grid. One piece of state
-   *  drives both, so they can never disagree about which row that is. */
-  let traced = $state(/** @type {number|null} */ (null));
+   *  drives both, so they can never disagree about which row that is.
+   *
+   *  A pinned row outranks the hovered one and survives the pointer leaving:
+   *  with a dozen curves stacked together, reading one of them means being
+   *  able to stop chasing it. */
+  let hovered = $state(/** @type {number|null} */ (null));
+  let pinned  = $state(/** @type {number|null} */ (null));
+  const traced = $derived(pinned ?? hovered);
+
+  // A different object, or a different slice, is a different set of rows.
+  $effect(() => { void detail; void slice; pinned = null; });
 
   /** Subscripts for every dimension beyond the second. */
   let slice = $state(/** @type {number[]} */ ([]));
@@ -154,14 +163,22 @@
         <MapGrid
           {detail} {decimals} {shaded} {slice} {onEditPoint} {onNavigate}
           highlight={traced}
-          onHoverRow={(y) => (traced = y)}
+          locked={pinned !== null}
+          onHoverRow={(y) => (hovered = y)}
+          onLockRow={(y) => (pinned = y)}
         />
       </div>
 
       {#if below === 'curves'}
-        <MapPlot {detail} {slice} {decimals} highlight={traced} onHover={(y) => (traced = y)} />
+        <MapPlot
+          {detail} {slice} {decimals}
+          highlight={traced}
+          locked={pinned !== null}
+          onHover={(y) => (hovered = y)}
+          onLock={(y) => (pinned = y)}
+        />
       {:else if below === 'surface'}
-        <MapSurface {detail} {slice} {decimals} highlight={traced} onHover={(y) => (traced = y)} />
+        <MapSurface {detail} {slice} {decimals} highlight={traced} onHover={(y) => (hovered = y)} />
       {/if}
     </div>
   </div>

@@ -14,8 +14,10 @@
    *   detail     – ParamDetail from the backend
    *   slice      – subscripts for dimensions 2 and up
    *   highlight  – row index to trace, or null
+   *   locked     – true when `highlight` is pinned rather than hovered
    *   decimals   – decimal override, or null for the A2L FORMAT
    *   onHover    – (row: number|null) => void
+   *   onLock     – (row: number|null) => void   pin or release a row
    */
   import { sliceIndices, valueExtent } from '$lib/mapGrid.js';
   import { buildPlot, nearestPoint } from '$lib/plot.js';
@@ -24,8 +26,10 @@
     detail    = null,
     slice     = /** @type {number[]} */ ([]),
     highlight = /** @type {number|null} */ (null),
+    locked    = false,
     decimals  = null,
     onHover   = (_row) => {},
+    onLock    = (_row) => {},
   } = $props();
 
   const HEIGHT = 150;
@@ -71,27 +75,54 @@
     return Number.isInteger(v) ? String(v) : String(Number(v.toFixed(4)));
   }
 
-  function move(e) {
-    if (!plot) return;
+  /** The point under the pointer, obeying a lock when one is set. */
+  function pointAt(e) {
+    if (!plot) return null;
     const box = e.currentTarget.getBoundingClientRect();
-    // Restrict to the traced row when there is one, so hovering the grid and
-    // sweeping the plot do not fight over which curve is being read.
-    const hit = nearestPoint(plot, e.clientX - box.left, highlight);
+    const x = e.clientX - box.left;
+    const y = e.clientY - box.top;
+    // Locked: stay on that curve and read along it. Otherwise match in both
+    // axes — every row shares the same x positions, so x alone would always
+    // return the same curve however near the pointer got to another.
+    return locked
+      ? nearestPoint(plot, x, null, highlight)
+      : nearestPoint(plot, x, y);
+  }
+
+  function move(e) {
+    const hit = pointAt(e);
     if (!hit) return;
     cursor = { row: hit.series, ...hit.point };
-    onHover(hit.series);
+    if (!locked) onHover(hit.series);
+  }
+
+  function click(e) {
+    const hit = pointAt(e);
+    if (!hit) return;
+    // Clicking the pinned curve releases it, so the plot alone is enough to
+    // both set and clear the lock.
+    onLock(locked && highlight === hit.series ? null : hit.series);
+  }
+
+  function keydown(e) {
+    if (e.key === 'Escape' && locked) {
+      onLock(null);
+      e.preventDefault();
+    }
   }
 
   function leave() {
     cursor = null;
-    onHover(null);
+    if (!locked) onHover(null);
   }
 </script>
 
 <div class="plot-wrap" bind:clientWidth={width}>
   {#if plot}
     <!-- A read-out of the curves, not a second way to edit them: the grid
-         above is where values change, and it takes the keyboard. -->
+         above is where values change. Clicking pins a curve so the readout
+         follows it alone, which is what makes a crowded family usable. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <svg
       class="plot"
@@ -101,6 +132,8 @@
       aria-label="Curves of {detail?.name ?? 'map'}"
       onpointermove={move}
       onpointerleave={leave}
+      onclick={click}
+      onkeydown={keydown}
     >
       {#if plot.zero !== null}
         <line class="zero" x1={PAD.l} y1={plot.zero} x2={width - PAD.r} y2={plot.zero} />
@@ -135,6 +168,11 @@
         <span>{plot.series.length} row{plot.series.length === 1 ? '' : 's'}</span>
         <span class="c-arrow">·</span>
         <span class="c-y">{fmt(plot.yLo)} … {fmt(plot.yHi)}</span>
+      {/if}
+      {#if locked}
+        <button class="lock" onclick={() => onLock(null)} title="Release the pinned row (Escape)">
+          pinned: {rowLabel(highlight)} ×
+        </button>
       {/if}
     </div>
   {/if}
@@ -189,6 +227,21 @@
     white-space: nowrap;
     overflow: hidden;
   }
+
+  .lock {
+    margin-left: auto;
+    background: none;
+    border: none;
+    padding: 0 2px;
+    font: inherit;
+    color: var(--c-accent);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .lock:hover { text-decoration: underline; }
+
+  .plot { cursor: crosshair; }
 
   .c-row   { color: var(--c-addr); }
   .c-arrow { color: var(--c-dim); }
