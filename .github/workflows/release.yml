@@ -10,6 +10,10 @@ permissions:
   contents: write
 
 jobs:
+  # Both macOS slices come off one Apple Silicon runner: aarch64 builds
+  # natively and x86_64 cross-compiles, which needs no Intel runner and keeps
+  # the two artefacts in step. The Rust cache is what makes the second build
+  # cheap — it recompiles only what differs by target.
   build-macos:
     runs-on: macos-latest
     steps:
@@ -21,11 +25,19 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      # Apple Silicon. This runs first and creates the draft release; the
+      # invocations after it find that draft and only add their artefacts.
+      - name: Build (Apple Silicon)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -40,6 +52,26 @@ jobs:
           releaseName: 'Hex Studio ${{ github.ref_name }}'
           releaseDraft: true
           prerelease: false
+          args: --target aarch64-apple-darwin
+
+      # Intel, for Macs that predate Apple Silicon and for anyone running an
+      # Intel build of a host application.
+      - name: Build (Intel)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Hex Studio ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          args: --target x86_64-apple-darwin
 
   build-windows:
     runs-on: windows-latest

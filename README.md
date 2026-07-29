@@ -223,7 +223,7 @@ Columns: `Name`, `Description`, `Category`, `Index`, `Breakpoints`,
 - OS window title updated with the currently open filename
 
 ### Cross-Platform
-- macOS `.app` + `.dmg` (Apple Silicon)
+- macOS `.app` + `.dmg`, both **Apple Silicon** and **Intel** — released builds are signed and notarised
 - Windows `.msi` + `.exe` (via GitHub Actions Windows runner)
 - Linux `.deb` / `.AppImage` (via GitHub Actions Ubuntu runner)
 - Full icon set: `.icns` (macOS), `.ico` (Windows, 7 sizes), `.png` (Linux)
@@ -279,13 +279,18 @@ Hot-reload is active for both the Svelte frontend and Rust backend.
 **macOS DMG:**
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/dmg/Hex Studio_0.3.1_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/Hex Studio_0.3.2_aarch64.dmg
+
+# For an Intel Mac, or to check the cross-build before tagging:
+rustup target add x86_64-apple-darwin
+npm run tauri build -- --target x86_64-apple-darwin
+# → src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Hex Studio_0.3.2_x64.dmg
 ```
 
 **Windows MSI** (requires Windows or GitHub Actions):
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/msi/Hex Studio_0.3.1_x64_en-US.msi
+# → src-tauri/target/release/bundle/msi/Hex Studio_0.3.2_x64_en-US.msi
 ```
 
 ### Automated releases via GitHub Actions
@@ -293,11 +298,13 @@ npm run tauri build
 Push a version tag to trigger a multi-platform build:
 
 ```bash
-git tag v0.3.1
-git push origin v0.3.1
+git tag v0.3.2
+git push origin v0.3.2
 ```
 
-The workflow (`.github/workflows/release.yml`) builds macOS and Windows bundles and publishes them as GitHub Release assets automatically.
+The workflow (`.github/workflows/release.yml`) builds the macOS bundles — both
+architectures off one Apple Silicon runner, since x86_64 cross-compiles — and
+the Windows bundles, then attaches them to a draft GitHub Release.
 
 ---
 
