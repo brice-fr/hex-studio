@@ -4,7 +4,14 @@ on:
   push:
     tags:
       - 'v*'
+  # A manual run has to be told which tag it is building. Without that the
+  # steps below fall back to github.ref_name, which on a manual run is the
+  # branch — producing a release called "Hex Studio main".
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to build (e.g. v0.3.2)'
+        required: true
 
 permissions:
   contents: write
@@ -48,8 +55,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Hex Studio ${{ github.ref_name }}'
+          tagName: ${{ inputs.tag_name || github.ref_name }}
+          releaseName: 'Hex Studio ${{ inputs.tag_name || github.ref_name }}'
           releaseDraft: true
           prerelease: false
           args: --target aarch64-apple-darwin
@@ -67,8 +74,8 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Hex Studio ${{ github.ref_name }}'
+          tagName: ${{ inputs.tag_name || github.ref_name }}
+          releaseName: 'Hex Studio ${{ inputs.tag_name || github.ref_name }}'
           releaseDraft: true
           prerelease: false
           args: --target x86_64-apple-darwin
@@ -93,7 +100,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Hex Studio ${{ github.ref_name }}'
+          tagName: ${{ inputs.tag_name || github.ref_name }}
+          releaseName: 'Hex Studio ${{ inputs.tag_name || github.ref_name }}'
           releaseDraft: true
           prerelease: false
