@@ -279,18 +279,18 @@ Hot-reload is active for both the Svelte frontend and Rust backend.
 **macOS DMG:**
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/dmg/Hex Studio_0.3.2_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/Hex Studio_0.3.3_aarch64.dmg
 
 # For an Intel Mac, or to check the cross-build before tagging:
 rustup target add x86_64-apple-darwin
 npm run tauri build -- --target x86_64-apple-darwin
-# → src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Hex Studio_0.3.2_x64.dmg
+# → src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Hex Studio_0.3.3_x64.dmg
 ```
 
 **Windows MSI** (requires Windows or GitHub Actions):
 ```bash
 npm run tauri build
-# → src-tauri/target/release/bundle/msi/Hex Studio_0.3.2_x64_en-US.msi
+# → src-tauri/target/release/bundle/msi/Hex Studio_0.3.3_x64_en-US.msi
 ```
 
 ### Automated releases via GitHub Actions
@@ -298,8 +298,8 @@ npm run tauri build
 Push a version tag to trigger a multi-platform build:
 
 ```bash
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.3.3
+git push origin v0.3.3
 ```
 
 The workflow (`.github/workflows/release.yml`) builds the macOS bundles — both
