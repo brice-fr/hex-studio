@@ -38,7 +38,15 @@ numbers in them come from `ASAP2_Demo_V171.hex` read through
 |------|-------|
 | `hex.png` | The hex view at the calibration block, with both side panes open — the rest of the image is `FF` padding and says nothing |
 | `data.png` | The data view: coverage banner, categories, parameter table, and a curve with its plot |
+| `og.png` | The repository's social preview card, 1280×640. Not referenced by the README — GitHub has no API for this, so it is uploaded by hand under Settings → General → Social preview |
 | `map.png` | The map editor: shaded grid above the slice as a 3D surface. Uses the COM_AXIS map because its breakpoints are uneven and its values fold, so the surface shows shape and true spacing rather than a flat ramp |
 
 Add a scene by extending `SCENES` in `harness.svelte` and the `for shot in …`
-loop in `capture.sh`.
+loop in `capture.sh`. A scene needing its own dimensions gets a case in that
+loop's `size` switch, as `og` does.
+
+## Social preview
+
+`og.png` has to be uploaded manually: GitHub exposes no REST or GraphQL endpoint
+for it, so re-running `capture.sh` refreshes the file but not the repository.
+After a redesign, upload it again at **Settings → General → Social preview**.

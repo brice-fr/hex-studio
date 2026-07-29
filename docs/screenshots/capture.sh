@@ -57,6 +57,7 @@ json.dump(recs, open(sys.argv[2], 'w'))
 PY
 
 cp "$OUT/harness.svelte" "$ROUTE/+page.svelte"
+cp "$ROOT/src-tauri/icons/128x128@2x.png" "$ROUTE/icon.png"
 
 echo "==> serving on :$PORT"
 ( cd "$ROOT" && npx vite dev --port "$PORT" --strictPort >/tmp/hex-shots-vite.log 2>&1 & echo $! >/tmp/hex-shots.pid )
@@ -66,10 +67,16 @@ for _ in $(seq 1 40); do
   sleep 0.5
 done
 
-for shot in hex data map; do
+# The social preview has its own aspect: GitHub wants 1280x640 and crops
+# anything else. It is captured at 1x regardless, since it must stay under 1 MB.
+for shot in hex data map og; do
+  case "$shot" in
+    og) size="1280,640"; scale=1 ;;
+    *)  size="1280,800"; scale="$SCALE" ;;
+  esac
   echo "==> capturing $shot"
-  "$CHROME" --headless --disable-gpu --hide-scrollbars --force-device-scale-factor="$SCALE" \
-    --virtual-time-budget=5000 --window-size=1280,800 \
+  "$CHROME" --headless --disable-gpu --hide-scrollbars --force-device-scale-factor="$scale" \
+    --virtual-time-budget=5000 --window-size="$size" \
     --screenshot="$OUT/$shot.png" \
     "http://localhost:$PORT/__shots?shot=$shot&theme=$THEME" >/dev/null 2>&1
 done

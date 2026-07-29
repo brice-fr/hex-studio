@@ -14,6 +14,7 @@
   import stats from './stats.json';
   import details from './details.json';
   import records from './records.json';
+  import icon from './icon.png';
 
   const q = new URLSearchParams(typeof location === 'undefined' ? '' : location.search);
   const shot = q.get('shot') ?? 'data';
@@ -30,6 +31,9 @@
     // This map rather than the 4x5 one: its values fold across both
     // directions and its X breakpoints run 0..5 then 13, 15, so the surface
     // shows shape and true spacing instead of a flat ramp.
+    // The repository's social preview card: GitHub renders a plain grey box
+    // without one, on every link anyone shares.
+    og:   { mode: 'data', sel: 'ASAM.C.CURVE.STD_AXIS', card: true },
     map:  { mode: 'data', sel: 'ASAM.C.MAP.COM_AXIS.FIX_AXIS', editor: true,
             below: '3D',
             status: 'ASAM.C.MAP.COM_AXIS.FIX_AXIS value[9] → 10' },
@@ -58,6 +62,29 @@
   });
 </script>
 
+{#if scene.card}
+  <div class="og">
+    <div class="og-left">
+      <img class="og-icon" src={icon} alt="" />
+      <h1 class="og-name">Hex Studio</h1>
+      <p class="og-tag">A hex editor that speaks A2L</p>
+      <ul class="og-points">
+        <li>Intel HEX · S-record · raw binary</li>
+        <li>ASAM MCD-2 MC parameters, curves and maps</li>
+        <li>CDFX import and export</li>
+      </ul>
+      <p class="og-foot">macOS · Windows · Linux — MIT</p>
+    </div>
+    <div class="og-shot">
+      <div class="og-app">
+        <FileMenu hasFile={true} viewMode="data" a2lName="ASAP2_Demo_V171.a2l" cdfxReady={true} />
+        <div class="og-body">
+          <DataView {rows} {stats} {detail} {selected} showType={true} />
+        </div>
+      </div>
+    </div>
+  </div>
+{:else}
 <div class="app-shell">
   <FileMenu
     hasFile={true} canUndo={true} canRedo={false} hasSelection={false}
@@ -91,6 +118,7 @@
   </div>
   <footer class="statusbar"><span>{scene.status}</span></footer>
 </div>
+{/if}
 
 {#if scene.editor}
   <MapEditor open={true} row={rows.find((r) => r.name === selected)} {detail}
@@ -99,6 +127,84 @@
 
 <style>
   :global(body) { margin: 0; }
+
+  /* ── Social preview card, 1280x640 ── */
+  .og {
+    display: flex;
+    height: 100vh;
+    background: var(--c-bg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    overflow: hidden;
+  }
+
+  .og-left {
+    width: 470px;
+    flex-shrink: 0;
+    padding: 52px 0 44px 56px;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+  }
+
+  .og-icon { width: 76px; height: 76px; border-radius: 16px; }
+
+  .og-name {
+    font-size: 46px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: var(--c-text);
+    margin: 22px 0 0;
+  }
+
+  .og-tag {
+    font-size: 21px;
+    color: var(--c-accent);
+    margin: 8px 0 0;
+    font-weight: 500;
+  }
+
+  .og-points {
+    list-style: none;
+    padding: 0;
+    margin: 28px 0 0;
+    font-size: 15.5px;
+    line-height: 2;
+    color: var(--c-muted);
+  }
+
+  .og-points li::before { content: '▸ '; color: var(--c-dim); }
+
+  .og-foot {
+    margin: auto 0 0;
+    font-size: 13px;
+    color: var(--c-dim);
+    font-family: 'Cascadia Code', 'SF Mono', monospace;
+  }
+
+  /* The app bleeds off the right edge: a whole window shrunk to fit would be
+     too small to read, whereas a corner of it stays legible. */
+  .og-shot {
+    flex: 1;
+    position: relative;
+    min-width: 0;
+  }
+
+  .og-app {
+    position: absolute;
+    top: 46px;
+    left: 0;
+    width: 1180px;
+    height: 720px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--c-border2);
+    border-radius: 10px 0 0 0;
+    overflow: hidden;
+    box-shadow: -14px 14px 40px rgba(0,0,0,0.13);
+  }
+
+  .og-body { flex: 1; min-height: 0; display: flex; }
+
   .app-shell { display: flex; flex-direction: column; height: 100vh; }
   .content-area { flex: 1; display: flex; overflow: hidden; min-height: 0; }
   .viewer-area { flex: 1; overflow: hidden; min-width: 0; }
