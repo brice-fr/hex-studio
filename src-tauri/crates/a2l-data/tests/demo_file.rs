@@ -1618,6 +1618,9 @@ fn dump_ui() {
     for n in [
         "ASAM.C.CURVE.STD_AXIS",
         "ASAM.C.MAP.STD_AXIS.STD_AXIS",
+        // Uneven breakpoints and a surface that folds, which is what makes the
+        // 3D view worth showing at all.
+        "ASAM.C.MAP.COM_AXIS.FIX_AXIS",
         "ASAM.C.CUBOID.ROW_DIR",
     ] {
         details.insert(n, decode::detail_for(&db, &img, n).expect(n));

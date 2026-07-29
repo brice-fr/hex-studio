@@ -27,9 +27,12 @@
             status: 'ASAP2_Demo_V171.hex — 0x00810000' },
     data: { mode: 'data', sel: 'ASAM.C.CURVE.STD_AXIS',
             status: 'ASAM.C.CURVE.STD_AXIS → -3 … 71 hours' },
-    map:  { mode: 'data', sel: 'ASAM.C.MAP.STD_AXIS.STD_AXIS', editor: true,
+    // This map rather than the 4x5 one: its values fold across both
+    // directions and its X breakpoints run 0..5 then 13, 15, so the surface
+    // shows shape and true spacing instead of a flat ramp.
+    map:  { mode: 'data', sel: 'ASAM.C.MAP.COM_AXIS.FIX_AXIS', editor: true,
             below: '3D',
-            status: 'ASAM.C.MAP.STD_AXIS.STD_AXIS value[6] → 6' },
+            status: 'ASAM.C.MAP.COM_AXIS.FIX_AXIS value[9] → 10' },
   };
   const scene = SCENES[shot] ?? SCENES.data;
 
