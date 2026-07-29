@@ -28,6 +28,7 @@
     data: { mode: 'data', sel: 'ASAM.C.CURVE.STD_AXIS',
             status: 'ASAM.C.CURVE.STD_AXIS → -3 … 71 hours' },
     map:  { mode: 'data', sel: 'ASAM.C.MAP.STD_AXIS.STD_AXIS', editor: true,
+            below: '3D',
             status: 'ASAM.C.MAP.STD_AXIS.STD_AXIS value[6] → 6' },
   };
   const scene = SCENES[shot] ?? SCENES.data;
@@ -41,6 +42,17 @@
   let selected = $state(scene.sel);
   let topAddress = $state(scene.goto ?? 0);
   const detail = $derived(details[selected] ?? null);
+
+  // Which panel sits under the grid is the editor's own state, so the harness
+  // presses the control rather than reaching inside it — the shot then shows
+  // exactly what a user would see after the same click.
+  $effect(() => {
+    if (!scene.below) return;
+    const btn = [...document.querySelectorAll('.seg-btn')].find(
+      (b) => b.textContent.trim() === scene.below,
+    );
+    if (btn && !btn.classList.contains('on')) btn.click();
+  });
 </script>
 
 <div class="app-shell">

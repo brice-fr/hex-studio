@@ -11,11 +11,11 @@ Load an **ASAM MCD-2 MC (A2L)** description alongside the image and it also beco
 <table>
 <tr>
 <td width="50%"><a href="docs/screenshots/hex.png"><img src="docs/screenshots/hex.png" alt="The hex view at the calibration block, with the segment list and data inspector panes open"></a></td>
-<td width="50%"><a href="docs/screenshots/map.png"><img src="docs/screenshots/map.png" alt="The map editor: a shaded 4x5 grid with verbal row labels, and each row plotted as a curve"></a></td>
+<td width="50%"><a href="docs/screenshots/map.png"><img src="docs/screenshots/map.png" alt="The map editor: a shaded 4x5 grid with verbal row labels, and the slice drawn as a 3D surface"></a></td>
 </tr>
 <tr>
 <td align="center"><em>Hex view — with the segment list and data inspector</em></td>
-<td align="center"><em>Map editor — shaded grid, verbal axis, curves per row</em></td>
+<td align="center"><em>Map editor — shaded grid, verbal axis, 3D surface</em></td>
 </tr>
 </table>
 
