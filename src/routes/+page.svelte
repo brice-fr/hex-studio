@@ -1308,6 +1308,7 @@
           stats={a2lStatsData}
           detail={a2lDetailData}
           selected={a2lSelected}
+          source={a2lPath}
           loading={a2lDecoding}
           {fontSize}
           showAddress={showColAddress}

@@ -63,6 +63,7 @@ Load an ASAM MCD-2 MC description (`.a2l`) and the image stops being bytes and b
 - The A2L last used with a given hex file is **remembered and pre-filled**, but never auto-loaded — the association is a hint, and silently decoding against the wrong description is worse than asking
 - **hex / data** toggle in the toolbar switches between the byte view and the parameter view; the segment list and data inspector belong to the hex view and are hidden (not forgotten) in the data view
 - **Coverage banner**: objects in the image, partial, absent, virtual, described and undescribed bytes, and the percentage of the image the description accounts for
+- **Absent parameters** — a `show` / `hide` link beside the *Absent* count keeps them out of every category but *Not in image*, where they always appear. Loading a description defaults to hiding them only when they are more than a tenth of the objects: a few missing among the present ones is useful context, but a description matching almost nothing buries the handful that decoded
 - **Categories** sidebar filters by shape — Scalars, Axes, 1D curves, Maps & cubes, Strings, Virtual, Not in image — each with a live count. *Unsupported* appears only when a file actually contains one
 - **Columns**: Name, Address, Type, Raw and Physical, individually resizable; Address, Type and Raw are toggleable in Preferences (only Type is on by default)
 - **Decimals stepper** overrides the A2L `FORMAT` for every fractional value at once

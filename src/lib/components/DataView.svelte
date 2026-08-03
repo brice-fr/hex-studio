@@ -26,12 +26,15 @@
    *   onEditValue – (name: string, phys: number) => void
    *   onEditText  – (name: string, text: string) => void
    *   onGoto      – (addr: number) => void
+   *   source      – identifies the loaded A2L; a change re-picks the default
+   *                 for whether absent parameters are listed
    */
   let {
     rows        = [],
     stats       = null,
     detail      = null,
     selected    = null,
+    source      = '',
     loading     = false,
     fontSize    = 13,
     showAddress = false,
@@ -346,6 +349,37 @@
   };
 
   /**
+   * Whether parameters missing from the image appear outside "Not in image".
+   *
+   * A handful of absent parameters among the present ones is useful context. A
+   * description matching almost nothing — 95% absent is a real case with the
+   * wrong hex file, or a partial dump — buries the few that decoded, and every
+   * category becomes a list of dashes.
+   */
+  let showAbsent = $state(true);
+
+  /** Share of listed objects that the image does not contain. */
+  function absentShare(list) {
+    if (!list.length) return 0;
+    return list.filter(isMissing).length / list.length;
+  }
+
+  const ABSENT_LIMIT = 0.10;
+
+  // Re-decide when a different description is loaded, not on every decode:
+  // editing a byte re-runs the decode, and that must not overrule the choice
+  // the user has made since opening the file.
+  let lastSource = null;
+  $effect(() => {
+    if (!rows.length || source === lastSource) return;
+    lastSource = source;
+    showAbsent = absentShare(rows) < ABSENT_LIMIT;
+  });
+
+  /** Rows kept out of every category but "Not in image". */
+  const hidden = (r) => !showAbsent && isMissing(r);
+
+  /**
    * The categories worth offering, in order of dimension: a scalar, then the
    * breakpoints a curve is indexed by, then the curves, then the grids.
    *
@@ -377,7 +411,12 @@
   const counts = $derived.by(() => {
     const c = Object.fromEntries(Object.keys(CATEGORY_MATCH).map((k) => [k, 0]));
     for (const r of rows) {
+      const skip = hidden(r);
       for (const id in CATEGORY_MATCH) {
+        // "Not in image" always holds every absent parameter — hiding them is
+        // about the other categories, and a count that disagreed with the list
+        // it opens would be worse than either.
+        if (skip && id !== 'absent') continue;
         if (CATEGORY_MATCH[id](r)) c[id]++;
       }
     }
@@ -389,6 +428,7 @@
     return rows.filter((r) => {
       const match = CATEGORY_MATCH[category] ?? CATEGORY_MATCH.all;
       if (!match(r)) return false;
+      if (category !== 'absent' && hidden(r)) return false;
       if (!q) return true;
       return r.name.toLowerCase().includes(q)
           || r.description.toLowerCase().includes(q);
@@ -456,7 +496,16 @@
         <span class="s-val warn">{stats.present_partial}</span>
       </div>
       <div class="stat">
-        <span class="s-label">Absent</span>
+        <span class="s-label">
+          Absent
+          {#if stats.absent > 0}
+            <button
+              class="s-toggle"
+              onclick={() => (showAbsent = !showAbsent)}
+              title="{showAbsent ? 'Hide' : 'Show'} the absent parameters in the categories other than “Not in image”"
+            >{showAbsent ? 'hide' : 'show'}</button>
+          {/if}
+        </span>
         <span class="s-val dim">{stats.absent}</span>
       </div>
       <!-- Counted apart from the three above: a computed parameter is never
@@ -705,6 +754,21 @@
   .s-val.warn   { color: var(--c-diff-changed); }
   .s-val.dim    { color: var(--c-muted); }
   .s-val.virt   { color: var(--c-diff-ref-only); }
+
+  /* Sits in the label row so it reads as a qualifier on "Absent" rather than
+     as part of the number. */
+  .s-toggle {
+    background: none;
+    border: none;
+    padding: 0 0 0 5px;
+    font: inherit;
+    color: var(--c-accent);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .s-toggle:hover { text-decoration: underline; }
   .s-val.accent { color: var(--c-accent-t); }
 
   /* ── Body: sidebar | table | detail ── */
