@@ -80,6 +80,49 @@ jobs:
           prerelease: false
           args: --target x86_64-apple-darwin
 
+      # tauri-action notarises and staples the .app and then wraps it in a dmg — but nothing ever
+      # submits the dmg itself, so the disk image ships signed-but-unnotarised. Measured on
+      # v0.3.3: the app inside came back "accepted / source=Notarized Developer ID", while the
+      # dmg around it was rejected as "Unnotarized Developer ID".
+      #
+      # scripts/release.sh avoids this locally by building the dmg itself as a second phase. Here
+      # the dmg already exists and has already been uploaded, so this notarises it, staples it, and
+      # replaces the uploaded asset. The spctl check is the point of the step, not decoration: it is
+      # the exact assertion that failed on v0.3.3, so a regression fails the build rather than
+      # shipping.
+      - name: Notarise and staple the disk images
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAG: ${{ inputs.tag_name || github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(target/*/release/bundle/dmg/*.dmg)
+          if [ ${#dmgs[@]} -eq 0 ]; then
+            echo "No dmg under target/*/release/bundle/dmg/ — did the bundle step change?" >&2
+            exit 1
+          fi
+          for dmg in "${dmgs[@]}"; do
+            echo "::group::$(basename "$dmg")"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+            xcrun stapler staple "$dmg"
+            spctl -a -vvv -t install "$dmg"
+            # Apple's own pre-distribution checker, judging the artefact the way a receiving Mac
+            # will. Exits non-zero on failure; requires macOS 14+. Skip with a note on older runners
+            # rather than failing — the spctl check above already proves notarisation.
+            if command -v syspolicy_check >/dev/null; then
+              syspolicy_check distribution "$dmg"
+            else
+              echo "note: syspolicy_check not available (needs macOS 14+); skipped" >&2
+            fi
+            gh release upload "$TAG" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+            echo "::endgroup::"
+          done
+
   build-windows:
     runs-on: windows-latest
     steps:
