@@ -100,9 +100,10 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          dmgs=(target/*/release/bundle/dmg/*.dmg)
+          # The Rust root is src-tauri/, so bundles land under src-tauri/target/, not target/.
+          dmgs=(src-tauri/target/*/release/bundle/dmg/*.dmg)
           if [ ${#dmgs[@]} -eq 0 ]; then
-            echo "No dmg under target/*/release/bundle/dmg/ — did the bundle step change?" >&2
+            echo "No dmg under src-tauri/target/*/release/bundle/dmg/ — did the bundle step change?" >&2
             exit 1
           fi
           for dmg in "${dmgs[@]}"; do
@@ -110,16 +111,18 @@ jobs:
             xcrun notarytool submit "$dmg" \
               --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
             xcrun stapler staple "$dmg"
+            # spctl is the gate: it is what actually catches the unnotarised-dmg bug and it behaves
+            # correctly on GitHub runners.
             spctl -a -vvv -t install "$dmg"
-            # Apple's own pre-distribution checker, judging the artefact the way a receiving Mac
-            # will. Exits non-zero on failure; requires macOS 14+. Skip with a note on older runners
-            # rather than failing — the spctl check above already proves notarisation.
-            if command -v syspolicy_check >/dev/null; then
-              syspolicy_check distribution "$dmg"
-            else
-              echo "note: syspolicy_check not available (needs macOS 14+); skipped" >&2
-            fi
+            # Upload the stapled dmg before syspolicy_check so the release always holds the correct
+            # artefact even if the check below fails.
             gh release upload "$TAG" "$dmg" --clobber --repo "$GITHUB_REPOSITORY"
+            # syspolicy_check is informational only in CI: on GitHub runners it reports
+            # "Internal Xprotect Error / Severity: Fatal" on perfectly good artefacts (verified
+            # against a real Mac). Running it fails good releases without catching real problems,
+            # so failures become warnings here. The gate is spctl above.
+            syspolicy_check distribution "$dmg" \
+              || echo "::warning::syspolicy_check failed for $(basename "$dmg") — this is expected on GitHub runners and does not indicate a problem with the artefact"
             echo "::endgroup::"
           done
 
